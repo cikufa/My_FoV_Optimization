@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcloud_loader.a  
+/usr/bin/ranlib libcloud_loader.a

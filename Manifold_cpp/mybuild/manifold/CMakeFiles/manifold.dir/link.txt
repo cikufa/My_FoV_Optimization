@@ -1,0 +1,2 @@
+/usr/bin/ar qc libmanifold.a  
+/usr/bin/ranlib libmanifold.a

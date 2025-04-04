@@ -1,0 +1,2 @@
+add_library(trajectory_optimizer trajectory_optimizer.h)
+set_target_properties(trajectory_optimizer PROPERTIES LINKER_LANGUAGE CXX)

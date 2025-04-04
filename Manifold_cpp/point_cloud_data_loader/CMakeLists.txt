@@ -1,0 +1,2 @@
+add_library(cloud_loader cloud_loader.h)
+set_target_properties(cloud_loader PROPERTIES LINKER_LANGUAGE CXX)

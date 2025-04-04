@@ -1,0 +1,56 @@
+reconstruction_commandline
+
+
+
+
+Reconstruct
+	conda activate env_pytorch
+	./reconstruct.sh test_davis_hall
+
+Register
+	conda activate env_pytorch
+	./registration.sh test_davis_hall reg_hall_reg
+Compute localization errors
+	./calculate_registration_errors.sh test_davis_hall reg_hall_reg
+Visualize
+	./visualize.sh test_davis_hall reg_hall_reg
+	then the images are in base_hall_reg/viz
+
+Extract 3D Points and View Directions
+	./extract_3dpoints_and_view_dir.sh base_davis_hall/
+	then the files are in base_davis_hall/sparse/0/
+
+
+
+
+
+
+Folder 
+	cd ~/FOV_Optimization_On_Manifold/test_davis_hall
+
+Reconstruct 
+	conda activate env_pytorch
+	python ~/colmap_utils/reconstruct_from_known_poses.py ./ --img_to_colmap_cam_list ./img_nm_to_colmap_cam.txt --img_to_colmap_pose_list ./img_name_to_colmap_Tcw.txt  --overwrite_db
+
+
+Register New images to reconstruction 
+	cd ~/FOV_Optimization_On_Manifold_/reg_hall_reg
+	python ~/colmap_utils/generate_img_rel_path.py --base_dir ../base_davis_hall/images --img_dir ./images --output_dir ./images --img_nm_to_cam_list ./img_nm_to_colmap_cam.txt
+
+
+	cd ~/FOV_Optimization_On_Manifold_/base_davis_hall
+	conda activate env_pytorch
+	python ~/colmap_utils/register_images_to_model.py ./ --reg_name test --upref_no_time --reg_list_fn ../reg_hall_reg/images/rel_img_path.txt --img_nm_to_colmap_cam_list ../reg_hall_reg/images/rel_img_nm_to_cam_list.txt
+
+
+
+Compute localization errors
+	cd ~/FOV_Optimization_On_Manifold_/base_davis_hall
+	python ~/colmap_utils/calculate_pose_errors.py --reg_model_dir ./test_sparse  --reg_img_name_to_colmap_Tcw ../reg_hall_reg/img_name_to_colmap_Tcw.txt --reg_img_dir ../reg_hall_reg/images  --output_path ./
+
+Visualize registered landmarks
+	cd ~/FOV_Optimization_On_Manifold_/base_davis_hall
+	mkdir viz
+	python ~/colmap_utils/viz_matched_landmarks.py --database ./test_database.db --img_dir ./images --model_dir ./test_sparse --rel_img_list ../reg_hall_reg/images/rel_img_path.txt  --outdir ./viz --make_video
+
+

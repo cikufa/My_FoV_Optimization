@@ -1,0 +1,51 @@
+reference lidar and image topics
+
+Note: the gimbal control actuation message topic /cam_motor_control is missing from the list, but it is required for the third run. 
+
+
+topics:      /camera/color/camera_info                                               503 msgs    : sensor_msgs/CameraInfo               
+             /camera/color/image_raw                                                 502 msgs    : sensor_msgs/Image                    
+             /camera/color/image_raw/compressed                                      502 msgs    : sensor_msgs/CompressedImage          
+             /camera/color/image_raw/compressed/parameter_descriptions                 1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/color/image_raw/compressed/parameter_updates                      1 msg     : dynamic_reconfigure/Config           
+             /camera/color/image_raw/compressedDepth/parameter_descriptions            1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/color/image_raw/compressedDepth/parameter_updates                 1 msg     : dynamic_reconfigure/Config           
+             /camera/color/image_raw/theora                                          504 msgs    : theora_image_transport/Packet        
+             /camera/color/image_raw/theora/parameter_descriptions                     1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/color/image_raw/theora/parameter_updates                          1 msg     : dynamic_reconfigure/Config           
+             /camera/color/metadata                                                  502 msgs    : realsense2_camera/Metadata           
+             /camera/depth/camera_info                                                77 msgs    : sensor_msgs/CameraInfo               
+             /camera/depth/image_rect_raw                                             76 msgs    : sensor_msgs/Image                    
+             /camera/depth/image_rect_raw/compressed                                  76 msgs    : sensor_msgs/CompressedImage          
+             /camera/depth/image_rect_raw/compressed/parameter_descriptions            1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/depth/image_rect_raw/compressed/parameter_updates                 1 msg     : dynamic_reconfigure/Config           
+             /camera/depth/image_rect_raw/compressedDepth                             76 msgs    : sensor_msgs/CompressedImage          
+             /camera/depth/image_rect_raw/compressedDepth/parameter_descriptions       1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/depth/image_rect_raw/compressedDepth/parameter_updates            1 msg     : dynamic_reconfigure/Config           
+             /camera/depth/image_rect_raw/theora                                       3 msgs    : theora_image_transport/Packet        
+             /camera/depth/image_rect_raw/theora/parameter_descriptions                1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/depth/image_rect_raw/theora/parameter_updates                     1 msg     : dynamic_reconfigure/Config           
+             /camera/depth/metadata                                                   76 msgs    : realsense2_camera/Metadata           
+             /camera/extrinsics/depth_to_color                                         1 msg     : realsense2_camera/Extrinsics         
+             /camera/motion_module/parameter_descriptions                              1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/motion_module/parameter_updates                                   1 msg     : dynamic_reconfigure/Config           
+             /camera/realsense2_camera_manager/bond                                  106 msgs    : bond/Status                           (2 connections)
+             /camera/rgb_camera/auto_exposure_roi/parameter_descriptions               1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/rgb_camera/auto_exposure_roi/parameter_updates                    1 msg     : dynamic_reconfigure/Config           
+             /camera/rgb_camera/parameter_descriptions                                 1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/rgb_camera/parameter_updates                                      1 msg     : dynamic_reconfigure/Config           
+             /camera/stereo_module/auto_exposure_roi/parameter_descriptions            1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/stereo_module/auto_exposure_roi/parameter_updates                 1 msg     : dynamic_reconfigure/Config           
+             /camera/stereo_module/parameter_descriptions                              1 msg     : dynamic_reconfigure/ConfigDescription
+             /camera/stereo_module/parameter_updates                                   1 msg     : dynamic_reconfigure/Config           
+             /localization                                                          2571 msgs    : nav_msgs/Odometry                    
+             /ouster/imu                                                            5367 msgs    : sensor_msgs/Imu                      
+             /ouster/imu_packets                                                    5367 msgs    : ouster_ros/PacketMsg                 
+             /ouster/lidar_packets                                                 17174 msgs    : ouster_ros/PacketMsg                 
+             /ouster/metadata                                                          1 msg     : std_msgs/String                      
+             /ouster/nearir_image                                                    537 msgs    : sensor_msgs/Image                    
+             /ouster/os_nodelet_mgr/bond                                             322 msgs    : bond/Status                           (4 connections)
+             /ouster/points                                                          536 msgs    : sensor_msgs/PointCloud2              
+             /ouster/range_image                                                     537 msgs    : sensor_msgs/Image                    
+             /ouster/reflec_image                                                    537 msgs    : sensor_msgs/Image                    
+             /ouster/signal_image                                                    537 msgs    : sensor_msgs/Image

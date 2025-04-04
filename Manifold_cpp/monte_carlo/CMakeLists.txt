@@ -1,0 +1,2 @@
+add_library(montecarlo monte_carlo.h)
+set_target_properties(montecarlo PROPERTIES LINKER_LANGUAGE CXX)

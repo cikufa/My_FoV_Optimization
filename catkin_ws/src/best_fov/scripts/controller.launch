@@ -1,0 +1,12 @@
+<launch>
+  <!-- Launch C++ node -->
+  <node name="controller" pkg="best_fov" type="best_fov_node" output="screen">
+    <!-- Add any additional parameters here if needed -->
+    <param name="file_name" value="$(find best_fov)/data/output_trajectory_tilted.txt" />
+    <param name="sub_sample_interval" value="3" />
+  </node>
+  <!-- Launch Python node -->
+  <node pkg="best_fov" type="serial_sub_pub.py" name="python_node" output="screen">
+    <!-- Add any additional parameters here if needed -->
+  </node>
+</launch>

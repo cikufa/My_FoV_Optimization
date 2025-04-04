@@ -1,0 +1,10 @@
+*.jpg
+*.jpeg
+*.png
+*.DS_Store
+__pycache__/
+*.log
+/Data
+/Datafov15
+/tmp
+

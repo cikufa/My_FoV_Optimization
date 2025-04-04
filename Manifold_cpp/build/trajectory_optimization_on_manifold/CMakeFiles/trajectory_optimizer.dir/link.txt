@@ -1,0 +1,2 @@
+/usr/bin/ar qc libtrajectory_optimizer.a  
+/usr/bin/ranlib libtrajectory_optimizer.a

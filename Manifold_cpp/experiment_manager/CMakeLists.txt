@@ -1,0 +1,2 @@
+add_library(e_manager experiment_manager.h)
+set_target_properties(e_manager PROPERTIES LINKER_LANGUAGE CXX)

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libe_manager.a  
+/usr/bin/ranlib libe_manager.a

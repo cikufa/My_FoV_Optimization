@@ -1,0 +1,2 @@
+/usr/bin/ar qc libmontecarlo.a  
+/usr/bin/ranlib libmontecarlo.a
