@@ -182,10 +182,9 @@ public:
 	    /*ADDED:*/
 		float get_optimized_max_visibility(){
 			float max_visibility_in_fov = 0.0f;
-			double visibility_limit = 22.5*M_PI/180.0;
 			for(Eigen::Vector3f K_: this->K_list){
 				float cos_theta = K_.transpose() * this->R * this->c;
-				float visibility = 1.0f / (1.0f + std::exp(-ks * (cos_theta - std::cos(visibility_limit))));
+				float visibility = 1.0f / (1.0f + std::exp(-ks * (cos_theta - std::cos(this->visibility_alpha))));
 				max_visibility_in_fov +=  visibility;
 			} 
 			return max_visibility_in_fov;
@@ -204,81 +203,7 @@ public:
 		}
 		
 		/*ADDED:*/
-		// #include <cmath>
-		// #include <array>
-		// inline float sign(float x) {
-		// 	return (x >= 0.0f) ? 1.0f : -1.0f;
-		// }
-
-		// std::array<float, 4> rotationMatrixToQuaternion(const float R[9]) {
-		// 	const float& r11 = R[0], r12 = R[1], r13 = R[2];
-		// 	const float& r21 = R[3], r22 = R[4], r23 = R[5];
-		// 	const float& r31 = R[6], r32 = R[7], r33 = R[8];
-
-		// 	// Calculate quaternion components (w, x, y, z)
-		// 	float q0 = (r11 + r22 + r33 + 1.0f) / 4.0f;
-		// 	float q1 = (r11 - r22 - r33 + 1.0f) / 4.0f;
-		// 	float q2 = (-r11 + r22 - r33 + 1.0f) / 4.0f;
-		// 	float q3 = (-r11 - r22 + r33 + 1.0f) / 4.0f;
-
-		// 	// Clamp negative values to zero
-		// 	q0 = std::max(q0, 0.0f);
-		// 	q1 = std::max(q1, 0.0f);
-		// 	q2 = std::max(q2, 0.0f);
-		// 	q3 = std::max(q3, 0.0f);
-
-		// 	// Take square roots
-		// 	q0 = std::sqrt(q0);
-		// 	q1 = std::sqrt(q1);
-		// 	q2 = std::sqrt(q2);
-		// 	q3 = std::sqrt(q3);
-
-		// 	// Determine largest component and set signs
-		// 	if (q0 >= q1 && q0 >= q2 && q0 >= q3) {
-		// 		q0 *= 1.0f;
-		// 		q1 *= sign(r32 - r23);
-		// 		q2 *= sign(r13 - r31);
-		// 		q3 *= sign(r21 - r12);
-		// 	} else if (q1 >= q0 && q1 >= q2 && q1 >= q3) {
-		// 		q0 *= sign(r32 - r23);
-		// 		q1 *= 1.0f;
-		// 		q2 *= sign(r21 + r12);
-		// 		q3 *= sign(r13 + r31);
-		// 	} else if (q2 >= q0 && q2 >= q1 && q2 >= q3) {
-		// 		q0 *= sign(r13 - r31);
-		// 		q1 *= sign(r21 + r12);
-		// 		q2 *= 1.0f;
-		// 		q3 *= sign(r32 + r23);
-		// 	} else {
-		// 		q0 *= sign(r21 - r12);
-		// 		q1 *= sign(r31 + r13);
-		// 		q2 *= sign(r32 + r23);
-		// 		q3 *= 1.0f;
-		// 	}
-
-		// 	// Normalize the quaternion
-		// 	const float norm = std::sqrt(q0*q0 + q1*q1 + q2*q2 + q3*q3);
-		// 	return {
-		// 		q0/norm,  // w
-		// 		q1/norm,  // x
-		// 		q2/norm,  // y
-		// 		q3/norm   // z
-		// 	};
-		// }
-
-
 		void brute_force_search_with_feature_count(void){
-	   		// int optimized_max_feature_in_FOV_=0;
-	   		// Eigen::Vector3f optimized_FOV_vector=this->R*this->c;
-	   		// // print_string("optimized_FOV_vector");
-	   		// // print_eigen_v(optimized_FOV_vector);
-			// for(Eigen::Vector3f K_: this->K_list){
-			// 	if( abs(acos((K_.transpose())*optimized_FOV_vector))<this->visibility_alpha){
-			// 		optimized_max_feature_in_FOV_+=1;
-			// 	}
-			// }
-
-			// this->optimized_max_feature_in_FOV=optimized_max_feature_in_FOV_;
 			int count=0;
 			for (Eigen::Vector3f direction:this->loader->get_pointcloud()){
 				count+=1;
@@ -328,7 +253,8 @@ public:
 	   		// // print_eigen_v(this->brute_force_best_vector);
 	   		// print_float(acos(optimized_FOV_vector.transpose()*this->brute_force_best_vector)*180.0/M_PI);
 	   }
-   		/*ADDED:*/
+   		
+	   /*ADDED:*/
 	    void brute_force_search_with_visibility(void){
 			for (Eigen::Vector3f direction:this->loader->get_pointcloud()){
 				direction=direction/direction.norm();
@@ -343,7 +269,14 @@ public:
 					this->brute_force_max_visibility = max_visibility_in_fov;
 					this->brute_force_best_vector_w_vis=direction;
 				}
-			}		
+			}	
+			optimized_max_vis= get_optimized_max_visibility();
+			// std::cout<<"this->brute_force_max_visibility "<<this->brute_force_max_visibility<<std::endl;
+			// std::cout<<" optimized_max_vis "<<this-> optimized_max_vis<<std::endl;
+			if(optimized_max_vis > this->brute_force_max_visibility){
+				this->brute_force_max_visibility = optimized_max_vis;
+				this->brute_force_best_vector_w_vis= this->R * this->c;
+			}	
 			return;
 		}
 
@@ -362,16 +295,20 @@ public:
 			std::vector<float> visibility_history;
 			float max_visibility = 10.0f;
 			const int history_window = 3;
-			int perturb_after= 5; 
-			float J_thresh= 1;
-			float vis_thresh= 1;
+			int perturb_after= 3; 
+			float initial_J_norm = 0;
+			float J_thresh;
+			float vis_thresh= this->K_list.size() * (this->visibility_alpha*2/360); //vis of fov if landmarks distributed equally;
 
 			float degree_between;
 			int feature_count;
 			Eigen::Vector3f velocity = Eigen::Vector3f::Zero();
 			float momentum = 0.0;
 			float step, v, w, coeff;
-			float initial_step = 0.001;
+			// float initial_step = 0.001;
+			float initial_step = (1/(this->K_list.size()*M_PI));;
+
+
 			float decay_rate = 0.01;  // Adjust this decay rate for tuning
 			float total_feature_count = 0;
 			float mean_feature_count= 0;
@@ -410,15 +347,25 @@ public:
 						float visibility_alpha;
 						float iteration_count = (float)i;
 						
+						// if (iteration_count / this->max_iteration < 0.2) {
+						// 	visibility_alpha = this->visibility_alpha_180;
+						// } else if (iteration_count / this->max_iteration < 0.3) {
+						// 	visibility_alpha = this->visibility_alpha_90;
+						// } else if (iteration_count / this->max_iteration < 0.4) {
+						// 	visibility_alpha = this->visibility_alpha_45;
+						// } else if (iteration_count / this->max_iteration < 0.5) {
+						// 	visibility_alpha = this->visibility_alpha_22_5;
+						// } else {
+						// 	visibility_alpha = this->visibility_alpha;
+						// }
+
 						if (iteration_count / this->max_iteration < 0.2) {
 							visibility_alpha = this->visibility_alpha_180;
 						} else if (iteration_count / this->max_iteration < 0.3) {
-							visibility_alpha = this->visibility_alpha_90;
+							visibility_alpha = this->visibility_alpha_120;
 						} else if (iteration_count / this->max_iteration < 0.4) {
-							visibility_alpha = this->visibility_alpha_45;
-						} else if (iteration_count / this->max_iteration < 0.5) {
-							visibility_alpha = this->visibility_alpha_22_5;
-						} else {
+							visibility_alpha = this->visibility_alpha_90;
+						} else{
 							visibility_alpha = this->visibility_alpha;
 						}
 		
@@ -447,11 +394,6 @@ public:
 				/*______________________________________________________________________________________-logging_________________*/
 				this->ajl << aJ_l << std::endl;
 				feature_count = this->get_count_in_fov();
-				// total_feature_count += feature_count; 
-				// mean_feature_count= total_feature_count / i;
-				// if (feature_count>max_feature_count){
-				// 	max_feature_count= feature_count;
-				// }
 				degree_between = acos(brute_force.transpose() * rotated_vec) * 180.0 / M_PI;
 				
 				this->quiversforonepoint << this->cnt << "," << std::to_string(this->ref_point[0]) << "," 
@@ -464,9 +406,18 @@ public:
 					/*______________________________________________________________________________________-perturb if needed __________________*/
 
 				/*NOTE: desice to ocontinue optimization at t with starting_c1 or break and start with starting_c2 */
+				if (i==0){
+					initial_J_norm = aJ_l.norm();
+				}
+				float a= 0.1f * initial_J_norm;
+				float b= float(this->K_list.size() * (this->visibility_alpha*2/360));
+				J_thresh = std::max(a,b); 
+				// if (i==0){
+				// 	std::cout<<"A:  "<<a<<"  b: "<<b<<std::endl;
+				// }
+				// std::cout<<"aj norm:  "<<aJ_l.norm()<<std::endl;
 				//ADDED: count iterations with low j
 				if (aJ_l.norm() < J_thresh) {
-					// std::cout<<"ajl norm"<< aJ_l.norm()<<std::endl;
 					zero_j_count++;  
 				} else {     
 					zero_j_count = 0;  
@@ -475,8 +426,7 @@ public:
 					zero_j_count = 0;  
 					float avg_recent_visibility = std::accumulate(visibility_history.begin(), visibility_history.end(), 0.0f) / visibility_history.size();
 					std::cout<<"avg recent visibility "<< avg_recent_visibility<<"  , max visibility  "<<max_visibility<<std::endl;
-					if (avg_recent_visibility < 0.5 * max_visibility || avg_recent_visibility<50) {
-					// if (current_visibility < 0.5 * max_visibility || current_visibility<1) {
+					if (avg_recent_visibility < vis_thresh) {
 						std::cout<<"not going well. go change start c and start over."<<std::endl;
 						redo=1;
 						break;
@@ -487,13 +437,10 @@ public:
 						break;
 					}
 				}
+				// std::cout<<"j threshold"<<J_thresh<<std::endl;
 
 /*___________________________________________ ________________________________________-update R__________________*/
-				// step = initial_step / (1 + std::cbrt(aJ_l.norm()));
 				step = initial_step; 
-				// step = initial_step / (1+ decay_rate * (i+1));
-				// step = (initial_step/ (1 + 0.05 * aJ_l.norm())) * exp(-decay_rate * i);
-				// step=(1/(this->K_list.size()*M_PI*8));
 				aJ_l = step * aJ_l;
 				this->R = this->exp_map(aJ_l) * this->R; 
 				this->rotated_vec = this->R * this->c;
@@ -604,14 +551,15 @@ private:
 		bool optimize_visibility_sigmoid;
 		std::string filename;
 		double ks=15;
-		float visibility_angle=45;
+		float visibility_angle=45.0;
 		double visibility_alpha=visibility_angle*M_PI/180.0;
 		double visibility_alpha_180=179.0*M_PI/180.0;
+		double visibility_alpha_120=120.0*M_PI/180.0;
 		double visibility_alpha_90=90.0*M_PI/180.0;
-		double visibility_alpha_45=90.0*M_PI/180.0;
-		double visibility_alpha_22_5=90.0*M_PI/180.0;
-		// double visibility_alpha_45=45.0*M_PI/180.0;
-		// double visibility_alpha_22_5=22.5*M_PI/180.0;
+		double visibility_alpha_45=45.0*M_PI/180.0;
+		double visibility_alpha_22_5=22.5*M_PI/180.0;
+		float optimized_max_vis;
+
 		int cnt;
 		std::vector<double> plotstep;                                              
 		Eigen::Vector3f rotated_vec;

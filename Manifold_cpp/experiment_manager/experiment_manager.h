@@ -49,8 +49,9 @@ TODO: /*map load/generate ------------------------------------------------------
 					this->map_dir.open("../../Map/"+std::to_string(i)+"_dir_"+map_output_filename);
 				}
 				/*NOTE:NOTE:NOTE:NOTE:NOTE:*/
-				// std::vector<int> features_per_cluster = {200, 200,200,200,200,200,200,200}; //  8   
-				std::vector<int> features_per_cluster = {200, 200, 200};
+				std::vector<int> features_per_cluster = {1000, 1000, 1000,1000,1000,1000,1000,1000}; //  8   
+				// std::vector<int> features_per_cluster = {200, 200, 200};
+				// std::vector<int> features_per_cluster = {2000, 2000, 2000};
 				// std::cout<<"mexp mng 60"<<std::endl;
 
 				this->my_generate_random_map(features_per_cluster);
@@ -86,8 +87,8 @@ TODO: /*map load/generate ------------------------------------------------------
 				/*ADDED:*/
 				// std::string prefix=std::to_string(time_since_epoc)+"_map_"+std::to_string(i)+"_"+std::to_string(j)+"_";
 				std::string prefix=std::to_string(i)+"_"+std::to_string(j)+"_";
-				MonteCarloRun run(x_resolution,y_resolution,z_resolution,x_low,x_high,y_low,y_high,z_low,z_high,prefix,map_path);
-				// MonteCarloRun_FIF run(x_resolution,y_resolution,z_resolution,x_low,x_high,y_low,y_high,z_low,z_high,prefix,map_path);
+				// MonteCarloRun run(x_resolution,y_resolution,z_resolution,x_low,x_high,y_low,y_high,z_low,z_high,prefix,map_path);
+				MonteCarloRun_FIF run(x_resolution,y_resolution,z_resolution,x_low,x_high,y_low,y_high,z_low,z_high,prefix,map_path);
 				run.run_monte_carlo_optimizer();
 
 				//count+=1;

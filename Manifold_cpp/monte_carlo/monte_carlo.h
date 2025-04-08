@@ -109,7 +109,7 @@ public:
 					/*ADDED: for random staring c*/
 					// starting_c= this->loader2->get_random();
 					// starting_c[2] = 0.0f;
-					// this->manifold=new FovOptimizerOnManifold("FOV_30degree.pdf",true,15.0,true,this->points_list,starting_c,true, ref_point, cnt);
+					// this->manifold=new FovOptimizerOnManifold("FOV_30degree.pdf",true,45.0,true,this->points_list,starting_c,true, ref_point, cnt);
 
 					 /* TODO:---------------------------------------init -----------------------------------------------*/
 
@@ -136,10 +136,11 @@ public:
 					/*ADDED:*/					
 					int redo=1;
 					int redo_cnt=0;
+
 					while (redo==1)
 					{
 						starting_c= starting_c_candidates[redo_cnt];
-						this->manifold=new FovOptimizerOnManifold("FOV_30degree.pdf",true,15.0,true,this->points_list,starting_c,true, ref_point, cnt);
+						this->manifold=new FovOptimizerOnManifold("FOV_30degree.pdf",true,45.0,true,this->points_list,starting_c,true, ref_point, cnt);
 						if(redo_cnt==0){
 							/*--------------------------------------------brute force-------------------------------------------------------*/
 							std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
@@ -174,6 +175,47 @@ public:
 						delete this->manifold;
 						
 					}
+					
+					// while (redo==1)
+					// {
+					// 	starting_c= starting_c_candidates[redo_cnt];
+					// 	this->manifold=new FovOptimizerOnManifold("FOV_30degree.pdf",true,15.0,true,this->points_list,starting_c,true, ref_point, cnt);
+					// 	if(redo_cnt==0){
+					// 		/*--------------------------------------------brute force-------------------------------------------------------*/
+					// 		std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+					// 		this->manifold->brute_force_search_with_visibility();
+					// 		this->manifold->brute_force_search_with_feature_count();
+					// 		std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+					// 		time_us=std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+					// 		this->brute_force_search_total_time_us+=(float)time_us;				
+					// 		this->brute_force_avg_time_file<<std::to_string((float)time_us)<<std::endl;
+					// 		brute_force_quiver_head_feat=this->manifold->get_brute_force_best_vector_feat();
+					// 		brute_force_quiver_head_vis=this->manifold->get_brute_force_best_vector_vis();
+					// 		brute_force_max_visibility_holder = this->manifold->get_brute_force_max_visibility();
+					// 		brute_force_max_feature_holder = this->manifold->get_brute_force_max_feature();
+
+					// 			/*ADDED: for steepest decent VisulIZATION */
+					// 		this->manifold->calculate_error_all_direction_for_each_t(); 
+					// 		this->manifold->calculate_J_all_direction_for_each_t(); 
+					// 	}
+						
+					// 	/*--------------------------------------------optimization-------------------------------------------------------*/
+					// 	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+					// 	redo = this->manifold->optimize(brute_force_quiver_head_vis); /*NOTE: bf vis based*/
+					// 	std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+					// 	time_us=std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+					// 	this->optimizer_monte_carlo_total_time_us+=(float)time_us;
+					// 	quiver_head=(this->manifold->get_R())*starting_c;
+					// 	quiver_head=quiver_head/quiver_head.norm();
+					// 	optimized_max_feature_holder = this->manifold->get_optimized_max_feature();
+					// 	optimized_max_visibility_holder = this->manifold->get_optimized_max_visibility();
+					// 	degree_between =acos(brute_force_quiver_head_vis.transpose()*quiver_head)*180.0/M_PI;
+					// 	redo_cnt++;
+					// 	delete this->manifold;
+						
+					// }
+						
+					
 					float visibility_between= brute_force_max_visibility_holder- optimized_max_visibility_holder;
 					cnt++;
 					this->degree_diff_record.push_back(degree_between);

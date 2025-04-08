@@ -18,12 +18,12 @@ int main(int argc, char *argv[]){
 	bool generate_map_only=false; 
 	bool generate_direction_and_uncertainty=false;
 
-	/* NOTE: for monte carlo run */
-	std::string map_name("../../Map/0_map.csv");
-	ExperimentManager( -250, 250, -250, 250, 0,10, "map.csv", cluster, resolution,  1, 4,4, 1,import_map,map_name,generate_map_only,generate_direction_and_uncertainty);
+	// /* NOTE: for monte carlo run */
+	// std::string map_name("../../Map/0_map.csv");
+	// ExperimentManager( -250, 250, -250, 250, 0,10, "map.csv", cluster, resolution,  1, 10,10, 1,import_map,map_name,generate_map_only,generate_direction_and_uncertainty);
 	/* NOTE: for monte_carlo_FIF run */
-	// std::string map_name("../../Map/two_walls_points_w.csv");
-	// ExperimentManager( -2.5, 2.5, -2.5, 2.5, -1,1, "map.csv", cluster, resolution,  1, 4,4, 1,import_map,map_name,generate_map_only,generate_direction_and_uncertainty);
+	std::string map_name("../../Map/two_walls_points_w.csv");
+	ExperimentManager( -2.5, 2.5, -2.5, 2.5, -1,1, "map.csv", cluster, resolution,  1, 10,10, 1,import_map,map_name,generate_map_only,generate_direction_and_uncertainty);
 																					
 }
 

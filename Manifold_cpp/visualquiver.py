@@ -67,32 +67,32 @@ def fov_plot(points, opt_quivers, BF_quivers, onepointlog, accfile):
         mask = opt_step == id_
         axes[2].plot(np.where(mask)[0], vis[mask], marker="s", label=f"ID {int(id_)}")
         last_index = np.where(mask)[0][-1]  # Get the last step index for this ID
-        axes[2].scatter(np.where(mask)[0], np.full_like(np.where(mask)[0], vis_bf[int(id_)]), c='black', marker='o', label=f"Max Vis ID {int(id_)}")
-        # axes[2].scatter(np.where(mask)[0], vis_bf[int(id_)], c='black', marker='o', label=f"Max Vis ID {int(id_)}")
-        axes[2].plot(np.where(mask)[0], np.full_like(np.where(mask)[0], vis_bf[int(id_)]), color="black", label=f"Max Vis ID {int(id_)}")
+        axes[2].plot(np.where(mask)[0], np.full(np.sum(mask), vis_bf[int(id_)], dtype=float), color="black", label=f"Max Vis ID {id_}")
 
     axes[2].set_title("visibility")
     axes[2].set_xlabel("step")
     axes[2].set_ylabel("visibility")
 
-    plt.show()
+    # plt.show()
 
 # ----------------------------------------------
-    scale_factoropt = 50
-    scale_factor = 30
-    scale_factorbff = 70
-    scale_factorbfv = 60
+    # scale_factoropt = 50
+    # scale_factor = 30
+    # scale_factorbff = 70
+    # scale_factorbfv = 60
+    # arrow = 0.3
+
+    #monte carlo fif
+    scale_factoropt = 0.5
+    scale_factor = 0.3
+    scale_factorbff = 0.4
+    scale_factorbfv = 0.4
     arrow = 0.5
-    # scale_factoropt = 0.5
-    # scale_factor = 0.3
-    # scale_factorbff = 0.5
-    # scale_factorbfv = 0.5
-    # arrow = 0.5
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
-    ax.scatter(points[:, 0], points[:, 1], points[:, 2], c='blue', alpha=0.2, label='Map Points')
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], c='blue', alpha=0.05, label='Map Points')
     # ax.scatter(mean[:, 0], mean[:, 1], mean[:, 2], c='blue', s=20, label='Mean ME')
     # ax.scatter(mean[:, 3], mean[:, 4], mean[:, 5], c='black', s=10, label='Mean CHEN')
 
@@ -113,31 +113,38 @@ def fov_plot(points, opt_quivers, BF_quivers, onepointlog, accfile):
                   alpha = 0.5, color='blue', arrow_length_ratio=arrow)
 
     
-    pnts_a = onepointlog[:, 1:4]
-    pnts_b = onepointlog[:, 4:7]
-    for a, b in zip(pnts_a, pnts_b):
-        ax.quiver(a[0], a[1], a[2], b[0] * scale_factor, b[1] * scale_factor, b[2] * scale_factor,
-                  alpha=0.5, color='red', arrow_length_ratio=arrow)
+    # pnts_a = onepointlog[:, 1:4]
+    # pnts_b = onepointlog[:, 4:7]
+    # for a, b in zip(pnts_a, pnts_b):
+    #     ax.quiver(a[0], a[1], a[2], b[0] * scale_factor, b[1] * scale_factor, b[2] * scale_factor,
+    #               alpha=0.5, color='red', arrow_length_ratio=arrow)
 
     ax.set_title('FOV quivers')
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_xlim([-5, 5])
-    ax.set_ylim([-5, 5])
-    ax.set_zlim([0, 3])
-    ax.set_box_aspect([10, 10, 3])
+     #monte carlo
+    # ax.set_xlim([-250, 250])
+    # ax.set_ylim([-250, 250])
+    # ax.set_zlim([0, 20])
+    # ax.set_box_aspect([25, 25, 1])
+
+     #monte carlo fif
+    ax.set_xlim([-2.5, 2.5])
+    ax.set_ylim([-2.5, 2.5])
+    ax.set_zlim([-1, 1])
+    ax.set_box_aspect([5, 5, 2])
     ax.legend()
     plt.show()
 
 
 which_twc = 2
-# points = np.loadtxt("../Map/two_walls_points_w.csv", delimiter=',')
-points = np.loadtxt("../Map/0_map.csv", delimiter=',')
+points = np.loadtxt("../Map/two_walls_points_w.csv", delimiter=',')
+# points = np.loadtxt("../Map/0_map.csv", delimiter=',')
 fov_quivers = np.loadtxt("../Data/0_1_single_run_rotated_quivers.csv", delimiter=',')
 BF_quivers = np.loadtxt("../Data/0_1_single_run_brute_force_rotated_quivers.csv", delimiter=',')
 mean = np.loadtxt("../Data/mean.csv", delimiter=',')
-acc_file= np.loadtxt("../Data/0_1_optimizer_accuracy_file.csv", delimiter=',')
+acc_file= np.loadtxt("../Data/0_1_optimizer_accuracy_file.csv", dtype=float, delimiter=',')
 onepointlog= np.loadtxt("../Data/quiversforonepoint.csv", delimiter=',') #id, twc, quiver head, num of features in fov
 mask = onepointlog[:,0]==which_twc
 # fov_plot(points, fov_quivers, BF_quivers, onepointlog[mask])
