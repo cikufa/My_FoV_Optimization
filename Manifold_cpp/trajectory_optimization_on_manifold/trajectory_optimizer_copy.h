@@ -46,20 +46,15 @@ public:
 		
 
 		this->trajectory=this->loader.Import_From_stamped_twc_File(input_trajectory_file_name," ");
-		std::cout<<"bib bib"<<std::endl;
 		Eigen::Vector3f starting_position;
 		// starting_position<<this->trajectory->position;
-		std::cout<<"52"<<std::endl;
-
 		starting_position = this->trajectory[0].get_position();
-		std::cout<<"55"<<std::endl;
-
+		
 		Eigen::Matrix3f starting_rotation;
 		// starting_rotation<<this->trajectory->rotation; //change to robot orientation along path yaw = arctan2(deltay/deltax)
     	starting_rotation = this->trajectory[0].get_rotation();
 
 		this->loader.ImportFromXyzFile(input_pointcloud_filename,1,true,false," ");
-		std::cout<<"62"<<std::endl;
 		// if(this->use_direction||this->use_uncertainty){
 		// 		this->loader.ImportFromDirUncertaintyFile(input_direction_and_uncertainty_filename,1," ");
 		// }
@@ -287,7 +282,7 @@ public:
 				float direction_dot=(K.transpose()*this->points_dir_list[counter]);
 				// 	print("final coeff",1.0-np.abs(direction_dot[0,0]))
 				if(this->DEBUG){
-					std::cout<<"direction_dot is " <<direction_dot<<std::endl;
+					// std::cout<<"direction_dot is " <<direction_dot<<std::endl;
 				}
 				// 	alpha=alpha*(1.0-np.abs(direction_dot[0,0]))
 				alpha=alpha*(1.0-fabs(direction_dot));
@@ -324,24 +319,24 @@ public:
   }
 
 	void optimize(bool write_to_file){
-		std::cout<<"op <1>"<<std::endl;
+		// std::cout<<"op <1>"<<std::endl;
 		for (int i =0;i<this->max_iteration;i++){
-			std::cout<<"op <2.0>"<<std::endl;
-			std::cout<<"this->trajectory size " <<this->trajectory.size()<<std::endl;
+			// std::cout<<"op <2.0>"<<std::endl;
+			// std::cout<<"this->trajectory size " <<this->trajectory.size()<<std::endl;
 			std::vector<Eigen::Vector3f> trajecotry_jacobian=this->velocity_finite_differencing_jacobian(this->trajectory,0.5);
 
 			//file write will write the entire trajectory for the iteration
-			std::cout<<"op <2.1>"<<std::endl;
+			// std::cout<<"op <2.1>"<<std::endl;
 			if (write_to_file){
 				this->initial_trajectory_file<<std::endl;
 				Eigen::Matrix3f R=this->trajectory[0].get_rotation();
 				Eigen::Vector3f v_;
 				v_=this->c;
 				v_=R*v_;
-				std::cout<<"op <2.2>"<<std::endl;
+				// std::cout<<"op <2.2>"<<std::endl;
 				this->write_arrow_to_file(this->trajectory[0].get_position(),v_);
 			}
-			std::cout<<"op <2>"<<std::endl;
+			// std::cout<<"op <2>"<<std::endl;
 			for (int j =0;j<trajecotry_jacobian.size();j++){
 				//print("trajecotry_jacobian[j]");
 				//print(trajecotry_jacobian[j]);
@@ -365,7 +360,7 @@ public:
 				}	
 			}
 
-			std::cout<<"op <3>"<<std::endl;
+			// std::cout<<"op <3>"<<std::endl;
 
 			if (write_to_file){
 				Eigen::Matrix3f R=this->trajectory.back().get_rotation();
@@ -375,19 +370,19 @@ public:
 				this->write_arrow_to_file(this->trajectory.back().get_position(),v__);
 			
 			}
-			std::cout<<"op <4>"<<std::endl;
+			// std::cout<<"op <4>"<<std::endl;
 		}
 
 		if (write_to_file){
 			for (PoseSE3 pose:this->trajectory){
 				Eigen::Matrix3f R=pose.get_rotation();
-				std::cout<<"pose rotation"<<R <<std::endl;
+				// std::cout<<"pose rotation"<<R <<std::endl;
 				Eigen::Vector3f v__;
 				//v__<<0,1,0;
 				v__=this->c;
 				v__=R*v__;
 
-				std::cout<<"v__"<<v__ <<std::endl;
+				// std::cout<<"v__"<<v__ <<std::endl;
 				this->write_arrow_to_output_file(pose.get_position(),v__);
 			}
 		}
