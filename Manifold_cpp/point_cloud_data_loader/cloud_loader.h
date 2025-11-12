@@ -133,27 +133,16 @@ public:
 	        // std::cout << "File opened successfully for reading." << std::endl;
 	        // You can read from the file here.
 	    }
-		//std::cout<<"<1.1>"<<std::endl;
+
 		std::string line;
 		int count=0;
 		while (getline (this->data_file, line)) {
-			//std::cout << line<<std::endl;
-			//std::cout<<"<1.1> count ="<<count<<std::endl;
-			// if (count==0){
-			// 	count+=1;
-			// 	continue;
-			// }
+	
 			if (count%downsample_factor!=0) {
 				count+=1;
 				continue;
 			}
-			// 	count+=1
-			// 	continue 
-		  // Output the text from the file
-
-			//line.pop_back(); //remove the last character
-		 	//std::cout << line<<std::endl;
-		 	//std::cout<<"<1.2>"<<std::endl;
+		
 		 	std::vector<std::string> splitted_line=this->split_string(line,delimiter);
 		 	float q_w=std::stof(splitted_line[0]);
 		 	float q_x=std::stof(splitted_line[1]);
@@ -173,20 +162,120 @@ public:
 
 		    PoseSE3 startingpose(v,rotation_matrix);
 		    trajectory.push_back(startingpose);
-
-			//std::cout<<"<1.34>"<<std::endl;
 			count+=1;
-			//std::cout<<"<1.4>"<<std::endl;
 		}
-		//std::cout<<"<2> ImportFromDirUncertaintyFile"<<std::endl;
-		//std::cout<<"<2>"<<std::endl;
-		// for (Eigen::Vector3f v:this->set_A){
-		// 	print_eigen_v(v);
-		// }
+
 		this->data_file.close();
 		return trajectory;
 	}
 
+	// std::vector<PoseSE3> Import_From_stamped_twc_File(std::string data_filename, std::string delimiter) {
+	// 	std::cout << "Import From stamped_twc File:" << data_filename << std::endl;
+		
+	// 	std::vector<PoseSE3> trajectory;
+	// 	this->filename = data_filename;
+	// 	this->data_file.open(this->filename);
+
+	// 	if (!this->data_file.is_open()) {
+	// 		std::cerr << "Failed to open the file for reading." << std::endl;
+	// 		return trajectory;
+	// 	}
+
+	// 	std::string line;
+	// 	int count = 0;
+		
+	// 	while (getline(this->data_file, line)) {
+	// 		std::vector<std::string> splitted_line = this->split_string(line, delimiter);
+		
+	// 		Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+			
+	// 		for (int i = 0; i < 4; i++) {
+	// 			for (int j = 0; j < 4; j++) {
+	// 				int idx = i * 4 + j;
+	// 				transform(i, j) = std::stof(splitted_line[idx]);
+	// 			}
+	// 		}
+
+	// 		Eigen::Vector3f position = transform.block<3, 1>(0, 3);  // Translation part
+	// 		Eigen::Matrix3f rotation = transform.block<3, 3>(0, 0);  // Rotation part
+	// 		PoseSE3 pose(position, rotation);
+	// 		trajectory.push_back(pose);
+	// 		count += 1;
+	// 	}
+
+	// 	this->data_file.close();
+	// 	std::cout << "Imported " << trajectory.size() << " poses from 4x4 matrices" << std::endl;
+	// 	return trajectory;
+	// }
+	
+	
+	std::vector<PoseSE3> Import_From_stamped_twc_File(std::string data_filename, std::string delimiter) {
+		std::cout << "Import From stamped_twc File: " << data_filename << std::endl;
+		
+		std::vector<PoseSE3> trajectory;
+		this->filename = data_filename;
+		this->data_file.open(this->filename);
+
+		if (!this->data_file.is_open()) {
+			std::cerr << "Failed to open the file for reading." << std::endl;
+			return trajectory;
+		}
+
+		std::string line;
+		int count = 0;
+		
+		while (getline(this->data_file, line)) {
+			// Skip empty lines and comment lines
+			if (line.empty() || line[0] == '#') {
+				continue;
+			}
+
+			std::vector<std::string> splitted_line = this->split_string(line, delimiter);
+			
+			// Your format has 26 entries: timestamp + 16 matrix + 9 unknown
+			// We need at least 17 (timestamp + 16 matrix values)
+			if (splitted_line.size() < 17) {
+				std::cerr << "Line " << count << ": Expected at least 17 values, got " << splitted_line.size() 
+						<< ". Skipping line." << std::endl;
+				count++;
+				continue;
+			}
+
+			try {
+				Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+				
+				// Skip first element (timestamp) and parse next 16 as 4x4 matrix
+				for (int i = 0; i < 4; i++) {
+					for (int j = 0; j < 4; j++) {
+						int idx = 1 + i * 4 + j;  // +1 to skip timestamp
+						transform(i, j) = std::stof(splitted_line[idx]);
+					}
+				}
+
+				Eigen::Vector3f position = transform.block<3, 1>(0, 3);  // Translation part
+				Eigen::Matrix3f rotation = transform.block<3, 3>(0, 0);  // Rotation part
+				PoseSE3 pose(position, rotation);
+				trajectory.push_back(pose);
+				
+			} catch (const std::invalid_argument& e) {
+				std::cerr << "ERROR: Invalid number format on line " << count << std::endl;
+				std::cerr << "Error: " << e.what() << std::endl;
+				std::cerr << "Line content: " << line << std::endl;
+				// Continue to next line instead of aborting
+			} catch (const std::out_of_range& e) {
+				std::cerr << "ERROR: Number out of range on line " << count << std::endl;
+				std::cerr << "Error: " << e.what() << std::endl;
+				std::cerr << "Line content: " << line << std::endl;
+			}
+			
+			count++;
+		}
+
+		this->data_file.close();
+		std::cout << "Successfully imported " << trajectory.size() << " poses from " << count << " lines" << std::endl;
+		return trajectory;
+	}
+	
 	void ImportFromTxtFile(std::string data_filename, std::string delimiter) {
 		this->filename = data_filename;
 		this->data_file.open(this->filename);
