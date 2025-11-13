@@ -14,6 +14,7 @@
 #include <fstream> 
 #include <sstream>
 #include <cloud_loader.h>
+#include <iomanip>
 
 template <typename T> void print(T x)
 {
@@ -24,11 +25,33 @@ template <typename T> void print(T x)
 class myTrajectoryOptimizerOnManifold{
 public:
 
-	myTrajectoryOptimizerOnManifold(std::string output_initial_trajectory_filename,std::string input_pointcloud_filename,std::string output_pointcloud_filename,bool use_direction, bool use_uncertainty,std::string input_direction_and_uncertainty_filename,std::string output_pointcloud_dir_filename,std::string input_trajectory_file,std::string output_trajectory_file){
-		this->myinitialization(output_initial_trajectory_filename,input_pointcloud_filename,output_pointcloud_filename,use_direction,use_uncertainty,input_direction_and_uncertainty_filename,output_pointcloud_dir_filename,input_trajectory_file,output_trajectory_file);
+	myTrajectoryOptimizerOnManifold(std::string output_initial_trajectory_filename, 
+		std::string output_initial_trajectory_filename_ue, 
+		std::string input_pointcloud_filename,
+		std::string output_pointcloud_filename,
+		bool use_direction, bool use_uncertainty,
+		std::string input_direction_and_uncertainty_filename,
+		std::string output_pointcloud_dir_filename,
+		std::string input_trajectory_file,
+		std::string output_trajectory_file, 
+		std::string output_trajectory_filename_ue){
+		
+		this->myinitialization(output_initial_trajectory_filename, output_initial_trajectory_filename_ue, input_pointcloud_filename,output_pointcloud_filename,use_direction,use_uncertainty,input_direction_and_uncertainty_filename,
+			output_pointcloud_dir_filename,input_trajectory_file,output_trajectory_file, output_trajectory_filename_ue);
 	};
 
-	void myinitialization(std::string output_initial_trajectory_filename,std::string input_pointcloud_filename,std::string output_pointcloud_filename,bool use_direction,bool use_uncertainty,std::string input_direction_and_uncertainty_filename,std::string output_pointcloud_dir_filename,std::string input_trajectory_file_name,std::string output_trajectory_file_name){
+	void myinitialization(
+    const std::string& output_initial_trajectory_filename,
+    const std::string& output_initial_trajectory_filename_ue,
+    const std::string& input_pointcloud_filename,
+    const std::string& output_pointcloud_filename,
+    bool use_direction,
+    bool use_uncertainty,
+    const std::string& input_direction_and_uncertainty_filename,
+    const std::string& output_pointcloud_dir_filename,
+    const std::string& input_trajectory_file_name,
+    const std::string& output_trajectory_file_name,
+    const std::string& output_trajectory_filename_ue){
 		//ignore
 		this->use_uncertainty=use_uncertainty;
 		this->use_direction=use_direction;
@@ -38,6 +61,9 @@ public:
 		this->initial_trajectory_file.open(this->output_initial_trajectory_filename);
 		this->output_trajectory_file.open(output_trajectory_file_name);
 
+		this->output_initial_trajectory_filename_ue = output_initial_trajectory_filename_ue;
+		this->output_trajectory_filename_ue= output_trajectory_filename_ue;
+
 		this->v<<1,1,1;
 		this->v=this->v/this->v.norm();
 		this->c<<1,0,0;
@@ -46,6 +72,8 @@ public:
 		
 
 		this->trajectory=this->loader.Import_From_stamped_twc_File(input_trajectory_file_name," ");
+		std::cout<<this->trajectory[1].get_position()<<std::endl;
+		std::cout<<this->trajectory[1].get_rotation()<<std::endl;
 		Eigen::Vector3f starting_position;
 		// starting_position<<this->trajectory->position;
 		starting_position = this->trajectory[0].get_position();
@@ -78,6 +106,99 @@ public:
 			this->valid_points.push_back(i);
 		}
 	}
+
+//added for ue conversion to match FIF output
+	void TwcToUEPose(const Eigen::Matrix4f& Twc, Eigen::Vector3f* posUE, Eigen::Vector3f* eulerUE)
+	{
+		// Convert to double precision for safety
+		Eigen::Matrix4d Twc_d = Twc.cast<double>();
+
+		// Same conversion matrices as baseline
+		Eigen::Matrix4d Tuew_w;
+		Tuew_w << 1, 0, 0, 0,
+				0, -1, 0, 0,
+				0, 0, 1, 0,
+				0, 0, 0, 1;
+
+		Eigen::Matrix4d Tc_uec;
+		Tc_uec << 0, 1, 0, 0,
+				0, 0, -1, 0,
+				1, 0, 0, 0,
+				0, 0, 0, 1;
+
+		Eigen::Matrix4d ue_Twc = Tuew_w * Twc_d * Tc_uec;
+
+		// Extract position
+		(*posUE) = ue_Twc.block<3,1>(0,3).cast<float>();
+
+		// Extract rotation as quaternion
+		Eigen::Matrix3d R = ue_Twc.block<3,3>(0,0);
+		Eigen::Quaterniond q(R);
+
+		// Convert quaternion to Unreal Euler (ZYX order: yaw, pitch, roll)
+		double yaw, pitch, roll;
+		quaternionToEulerUnrealEngine(q, yaw, pitch, roll);
+
+		(*eulerUE) = Eigen::Vector3f(roll, pitch, yaw);
+	}
+
+
+	void quaternionToEulerUnrealEngine(const Eigen::Quaterniond& q,
+									double& yaw, double& pitch, double& roll)
+	{
+		// Unreal uses Z-Y-X intrinsic (yaw, pitch, roll)
+		double sinr_cosp = 2 * (q.w() * q.x() + q.y() * q.z());
+		double cosr_cosp = 1 - 2 * (q.x() * q.x() + q.y() * q.y());
+		roll = std::atan2(sinr_cosp, cosr_cosp);
+
+		double sinp = 2 * (q.w() * q.y() - q.z() * q.x());
+		if (std::abs(sinp) >= 1)
+			pitch = std::copysign(M_PI / 2, sinp);
+		else
+			pitch = std::asin(sinp);
+
+		double siny_cosp = 2 * (q.w() * q.z() + q.x() * q.y());
+		double cosy_cosp = 1 - 2 * (q.y() * q.y() + q.z() * q.z());
+		yaw = std::atan2(siny_cosp, cosy_cosp);
+
+		// Convert to degrees
+		roll  *= 180.0 / M_PI;
+		pitch *= 180.0 / M_PI;
+		yaw   *= 180.0 / M_PI;
+	}
+
+	void saveTrajectoryAsUE_Format(const std::vector<PoseSE3>& trajectory, const std::string& filename)
+	{
+		std::ofstream ueFile(filename);
+		if (!ueFile.is_open()) {
+			std::cerr << "Cannot open file: " << filename << std::endl;
+			return;
+		}
+
+		for (const PoseSE3& pose : trajectory)
+		{
+			Eigen::Matrix4f Twc;
+			Twc.setIdentity();
+			Twc.block<3,3>(0,0) = pose.get_rotation();
+			Twc.block<3,1>(0,3) = pose.get_position();
+
+			Eigen::Vector3f posUE, eulerUE;
+			TwcToUEPose(Twc, &posUE, &eulerUE);
+
+			ueFile << std::fixed << std::setprecision(8)
+				<< posUE.x() << " "
+				<< posUE.y() << " "
+				<< posUE.z() << " "
+				<< eulerUE.x() << " "
+				<< eulerUE.y() << " "
+				<< eulerUE.z() << std::endl;
+		}
+
+		ueFile.close();
+		std::cout << "Saved Unreal trajectory to " << filename << std::endl;
+	}
+
+	
 
 	Eigen::Matrix3f skew(Eigen::Vector3f x){
 		Eigen::Matrix3f skew;
@@ -194,29 +315,6 @@ public:
    		this->valid_points=valid_list;
    	}
 
-   	// std::vector<PoseSE3> import_trajectory(std::vector<Eigen::Vector3f> traj_positions, std::vector<float> yaws){
-   	// 		std::vector<PoseSE3> trajectory;
-   	// 		Eigen::Vector3f dummy_vector;
-   	// 		this->Matrix_from_RPY_degree(0,0,yaws[0]);
-   	// 		dummy_vector=this->c;
-   	// 		Eigen::Matrix3f starting_rotation=this->Matrix_from_RPY_degree(0,0,yaws[0]);
-   	// 		dummy_vector=starting_rotation*dummy_vector;
-   	// 		Eigen::Vector3f starting_position=traj_positions[0];
-   	// 		this->initial_trajectory_file<<std::to_string(starting_position[0])<<","<<std::to_string(starting_position[1])<<","<<std::to_string(starting_position[2])<<","<<std::to_string(dummy_vector[0])<<","<<std::to_string(dummy_vector[1])<<","<<std::to_string(dummy_vector[2])<<std::endl;
-   	// 		for (int i=0; i<traj_positions.size();i++){
-   	// 		//for (Eigen::Vector3f pos:traj_positions){
-	//    			Eigen::Vector3f v,rotated_v,R_input_rotated_v,current_position;
-	//    			v=(this->c)*10.0; //NOTE: whats 10
-	//    			Eigen::Matrix3f current_rotation=this->Matrix_from_RPY_degree(0,0,yaws[i]);
-	//    			rotated_v=current_rotation*v;
-	//    			current_position=traj_positions[i];
-   	// 			this->initial_trajectory_file<<std::to_string(current_position[0])<<","<<std::to_string(current_position[1])<<","<<std::to_string(current_position[2])<<","<<std::to_string(rotated_v[0])<<","<<std::to_string(rotated_v[1])<<","<<std::to_string(rotated_v[2])<<std::endl;
-   	// 			PoseSE3 pose(current_position,current_rotation);
-   	// 			trajectory.push_back(pose);
-   	// 		}
-   	// 		return trajectory;
-   	// }
-
 	void write_arrow_to_file(Eigen::Vector3f position,Eigen::Vector3f ray_direction){
 		this->initial_trajectory_file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","<<std::to_string(ray_direction[0])<<","<<std::to_string(ray_direction[1])<<","<<std::to_string(ray_direction[2])<<std::endl;
 	}
@@ -319,6 +417,9 @@ public:
   }
 
 	void optimize(bool write_to_file){
+		//NOTE: added
+		saveTrajectoryAsUE_Format(this->trajectory, this->output_initial_trajectory_filename_ue);
+
 		// std::cout<<"op <1>"<<std::endl;
 		for (int i =0;i<this->max_iteration;i++){
 			// std::cout<<"op <2.0>"<<std::endl;
@@ -357,6 +458,7 @@ public:
 				v=R*v;
 				if (write_to_file){
 					this->write_arrow_to_file(this->trajectory[j+1].get_position(),v);
+					
 				}	
 			}
 
@@ -384,7 +486,10 @@ public:
 
 				// std::cout<<"v__"<<v__ <<std::endl;
 				this->write_arrow_to_output_file(pose.get_position(),v__);
+
 			}
+			//NOTE: added
+			saveTrajectoryAsUE_Format(this->trajectory, this->output_trajectory_filename_ue);
 		}
 	}
 
@@ -396,6 +501,8 @@ private:
 	std::string output_initial_trajectory_filename;
 	std::ofstream initial_trajectory_file;
 	std::ofstream output_trajectory_file;
+	std::string output_initial_trajectory_filename_ue;
+	std::string output_trajectory_filename_ue;
 	int max_iteration=30;
 	CloudLoader loader;
 	std::vector<Eigen::Vector3f> points_list;
@@ -409,7 +516,7 @@ private:
 	double visibility_alpha_90=90.0*M_PI/180.0;
 	double visibility_alpha_60=60.0*M_PI/180.0;
 	bool optimize_visibility_sigmoid=true;
-	Eigen::Vector3f c; //camera principle axis
+	Eigen::Vector3f c; //camera principle axi s
 	std::ofstream montecarlopointsfile;
 	std::ofstream montecarlopointsdirfile;
 	std::ofstream pcdfile;
