@@ -42,15 +42,17 @@ public:
 
 	void myinitialization(
     const std::string& output_initial_trajectory_filename,
-    const std::string& output_initial_trajectory_filename_ue,
+    const std::string& output_initial_trajectory_filename_ue,  //gotta have xyz matched with stamped_twc, and  yaw along path
     const std::string& input_pointcloud_filename,
     const std::string& output_pointcloud_filename,
     bool use_direction,
     bool use_uncertainty,
+	//ignore
     const std::string& input_direction_and_uncertainty_filename,
-    const std::string& output_pointcloud_dir_filename,
+    const std::string& output_pointcloud_dir_filename,  //dir means direction
+	
     const std::string& input_trajectory_file_name,
-    const std::string& output_trajectory_file_name,
+    const std::string& output_trajectory_filename,
     const std::string& output_trajectory_filename_ue){
 		//ignore
 		this->use_uncertainty=use_uncertainty;
@@ -59,7 +61,7 @@ public:
 
 		this->output_initial_trajectory_filename=output_initial_trajectory_filename;
 		this->initial_trajectory_file.open(this->output_initial_trajectory_filename);
-		this->output_trajectory_file.open(output_trajectory_file_name);
+		this->output_trajectory_file.open(output_trajectory_filename);
 
 		this->output_initial_trajectory_filename_ue = output_initial_trajectory_filename_ue;
 		this->output_trajectory_filename_ue= output_trajectory_filename_ue;
@@ -69,18 +71,17 @@ public:
 		this->c<<1,0,0;
 		this->c=this->c/this->c.norm();
 		this->pcdfile.open(output_pointcloud_filename);
-		
-
-		this->trajectory=this->loader.Import_From_stamped_twc_File(input_trajectory_file_name," ");
+		this->trajectory= this->import_trajectory(input_trajectory_file_name," ");
 		std::cout<<this->trajectory[1].get_position()<<std::endl;
 		std::cout<<this->trajectory[1].get_rotation()<<std::endl;
 		Eigen::Vector3f starting_position;
 		// starting_position<<this->trajectory->position;
-		starting_position = this->trajectory[0].get_position();
+		// starting_position = this->trajectory[0].get_position();
 		
-		Eigen::Matrix3f starting_rotation;
-		// starting_rotation<<this->trajectory->rotation; //change to robot orientation along path yaw = arctan2(deltay/deltax)
-    	starting_rotation = this->trajectory[0].get_rotation();
+		//NOTE: starting_rotation<<this->trajectory->rotation; //change to robot orientation along path yaw = arctan2(deltay/deltax)
+		// Eigen::Matrix3f starting_rotation;
+		// starting_rotation<<1,0,0,0,1,0,0,0,1;
+		// starting_rotation = this->trajectory[0].get_rotation();
 
 		this->loader.ImportFromXyzFile(input_pointcloud_filename,1,true,false," ");
 		// if(this->use_direction||this->use_uncertainty){
@@ -91,6 +92,7 @@ public:
 			this->pcdfile<<point[0]<<","<<point[1]<<","<<point[2]<<std::endl;
 		}
 		this->pcdfile.close();
+		std::cout<<"pcd entries written: "<<this->loader.get_pointcloud().size()<<std::endl;
 
 		//save pointcloud_dir and uncertainty
 		// std::vector<Eigen::Vector3f> pointcloud_dir_vector=this->loader.get_pointcloud_dir();
@@ -135,13 +137,41 @@ public:
 		Eigen::Matrix3d R = ue_Twc.block<3,3>(0,0);
 		Eigen::Quaterniond q(R);
 
-		// Convert quaternion to Unreal Euler (ZYX order: yaw, pitch, roll)
 		double yaw, pitch, roll;
 		quaternionToEulerUnrealEngine(q, yaw, pitch, roll);
 
-		(*eulerUE) = Eigen::Vector3f(roll, pitch, yaw);
+		(*eulerUE) = Eigen::Vector3f(pitch, yaw, roll);
 	}
 
+	Eigen::Matrix4f UEPoseToTwc(const Eigen::Vector3f& posUE, const Eigen::Vector3f& eulerUE)
+	{
+		Eigen::Matrix4d ue_Twc = Eigen::Matrix4d::Identity();
+		double pitch_rad = eulerUE[0] * M_PI / 180.0;
+		double yaw_rad = eulerUE[1] * M_PI / 180.0;
+		double roll_rad = eulerUE[2] * M_PI / 180.0;
+
+		Eigen::Quaterniond q = Eigen::AngleAxisd(yaw_rad, Eigen::Vector3d::UnitZ())
+							* Eigen::AngleAxisd(pitch_rad, Eigen::Vector3d::UnitY())
+							* Eigen::AngleAxisd(roll_rad, Eigen::Vector3d::UnitX());
+
+		ue_Twc.block<3,3>(0,0) = q.toRotationMatrix();
+		ue_Twc.block<3,1>(0,3) = posUE.cast<double>();
+
+		Eigen::Matrix4d Tuew_w;
+		Tuew_w << 1, 0, 0, 0,
+				0, -1, 0, 0,
+				0, 0, 1, 0,
+				0, 0, 0, 1;
+
+		Eigen::Matrix4d Tc_uec;
+		Tc_uec << 0, 1, 0, 0,
+				0, 0, -1, 0,
+				1, 0, 0, 0, 
+				0, 0, 0, 1;
+
+		Eigen::Matrix4d Twc_d = Tuew_w.inverse() * ue_Twc * Tc_uec.inverse();
+		return Twc_d.cast<float>();
+	}
 
 	void quaternionToEulerUnrealEngine(const Eigen::Quaterniond& q,
 									double& yaw, double& pitch, double& roll)
@@ -175,6 +205,7 @@ public:
 			return;
 		}
 
+		int index = 0;
 		for (const PoseSE3& pose : trajectory)
 		{
 			Eigen::Matrix4f Twc;
@@ -185,20 +216,108 @@ public:
 			Eigen::Vector3f posUE, eulerUE;
 			TwcToUEPose(Twc, &posUE, &eulerUE);
 
-			ueFile << std::fixed << std::setprecision(8)
+			ueFile << index << " "   
+				<< std::fixed << std::setprecision(8)
 				<< posUE.x() << " "
 				<< posUE.y() << " "
 				<< posUE.z() << " "
 				<< eulerUE.x() << " "
 				<< eulerUE.y() << " "
 				<< eulerUE.z() << std::endl;
+
+			++index;
 		}
 
 		ueFile.close();
-		std::cout << "Saved Unreal trajectory to " << filename << std::endl;
+		std::cout << "Saved Unreal trajectory to " << filename << " (" << index << " poses)" << std::endl;
 	}
 
-	
+
+    std::vector<PoseSE3> import_trajectory(std::string data_filename, std::string delimiter, bool use_input_yaw=false){
+        std::cout << "Import From stamped_twc_ue File: " << data_filename << std::endl;
+        std::vector<PoseSE3> trajectory;
+        std::vector<Eigen::Matrix4f> twc_list;
+        std::vector<float> input_yaws;
+        std::ifstream data_file(data_filename);
+
+        if (!data_file.is_open()) {
+            std::cerr << "Failed to open the file for reading." << std::endl;
+            return trajectory;
+        }
+
+        std::string line;
+        int count = 0;
+        
+        while (std::getline(data_file, line)) {
+            // Skip empty lines and comment lines
+            if (line.empty() || line[0] == '#') { continue; }
+
+            std::vector<std::string> splitted_line = this->loader.split_string(line, delimiter);
+            Eigen::Vector3f ue_position;
+            ue_position << std::stof(splitted_line[1]),
+                           std::stof(splitted_line[2]),
+                           std::stof(splitted_line[3]);
+            Eigen::Vector3f ue_euler;
+            ue_euler << std::stof(splitted_line[4]),
+                        std::stof(splitted_line[5]),
+                        std::stof(splitted_line[6]);
+
+            Eigen::Matrix4f Twc = this->UEPoseToTwc(ue_position, ue_euler);
+            twc_list.push_back(Twc);
+            input_yaws.push_back(ue_euler[1]);
+
+            ++count;
+        }
+        data_file.close();
+
+        if (twc_list.empty()) {
+            return trajectory;
+        }
+
+        std::vector<float> path_yaws(twc_list.size(), 0.0f);
+        if (twc_list.size() > 1) {
+            for (size_t i = 0; i + 1 < twc_list.size(); ++i) {
+                Eigen::Vector3f current = twc_list[i].block<3,1>(0,3);
+                Eigen::Vector3f next = twc_list[i+1].block<3,1>(0,3);
+                Eigen::Vector3f delta = next - current;
+                if (delta.head<2>().norm() < 1e-6f && i > 0) {
+                    path_yaws[i] = path_yaws[i-1];
+                } else {
+                    float yaw_rad = std::atan2(delta[1], delta[0]);
+                    path_yaws[i] = yaw_rad * 180.0f / M_PI;
+                }
+            }
+            path_yaws.back() = path_yaws[path_yaws.size() - 2];
+        }
+
+        Eigen::Vector3f starting_position = twc_list.front().block<3,1>(0,3);
+        const std::vector<float>& yaw_source = use_input_yaw ? input_yaws : path_yaws;
+        Eigen::Matrix3f starting_rotation = this->Matrix_from_RPY_degree(0,0,yaw_source[0]);
+        Eigen::Vector3f starting_direction = starting_rotation * this->c;
+        // this->initial_trajectory_file<<std::to_string(starting_position[0])<<","<<std::to_string(starting_position[1])<<","<<std::to_string(starting_position[2])<<","<<std::to_string(starting_direction[0])<<","<<std::to_string(starting_direction[1])<<","<<std::to_string(starting_direction[2])<<std::endl;
+
+        for (size_t i = 0; i < twc_list.size(); ++i) {
+            Eigen::Vector3f position = twc_list[i].block<3,1>(0,3);
+            Eigen::Matrix3f rotation = this->Matrix_from_RPY_degree(0,0,yaw_source[i]);
+            PoseSE3 pose(position, rotation);
+            trajectory.push_back(pose);
+
+			//save initial trajectopry quivers
+            // Eigen::Vector3f direction = rotation * (this->c * 10.0f);
+            // this->initial_trajectory_file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","<<std::to_string(direction[0])<<","<<std::to_string(direction[1])<<","<<std::to_string(direction[2])<<std::endl;
+        }
+
+        return trajectory;
+
+    }
+
+	Eigen::Matrix3f Matrix_from_RPY_degree(float x,float y,float z){//XYZ order, //degree
+	    Eigen::Matrix3f R;
+	    R= Eigen::AngleAxisf(x*M_PI/180.0, Eigen::Vector3f::UnitX())
+	  	* Eigen::AngleAxisf(y*M_PI/180.0, Eigen::Vector3f::UnitY())
+	  	* Eigen::AngleAxisf(z*M_PI/180.0, Eigen::Vector3f::UnitZ());
+	  	return R;
+	}
 
 	Eigen::Matrix3f skew(Eigen::Vector3f x){
 		Eigen::Matrix3f skew;
@@ -273,8 +392,7 @@ public:
 		}
 	}
 
-// NOTE:rotational velocity constraint
-   	///velocity finite differencing- sum terms
+// rotational velocity constraint
 	std::vector<Eigen::Vector3f> velocity_finite_differencing_jacobian(std::vector<PoseSE3> starting_trajectory,float step_size){
 		std::vector<Eigen::Vector3f> trajecotry_jacobian;
 	   	//suppose rotation velocity difference is   R2R1^T,  R1 is the earlier rotation, R2 is the later rotation
@@ -351,8 +469,6 @@ public:
  				KTRC=u;
  				residual=residual+KTRC;
 
-
-
 				float visibility_alpha;
 				if(iteration_count/this->max_iteration<0.05){
 					 visibility_alpha=this->visibility_alpha_180;
@@ -371,7 +487,6 @@ public:
  				F_Jacobian=coeff*J;
 			}
 
-				// # Nov11 Insertion Point,triangulation direction
 				// if self.use_direction==True:
 			float alpha=4.0;
 			if(this->use_direction){
@@ -417,70 +532,56 @@ public:
   }
 
 	void optimize(bool write_to_file){
-		//NOTE: added
+
+		Eigen::Matrix3f R;
+		Eigen::Vector3f v__, v_, v;
 		saveTrajectoryAsUE_Format(this->trajectory, this->output_initial_trajectory_filename_ue);
 
-		// std::cout<<"op <1>"<<std::endl;
-		for (int i =0;i<this->max_iteration;i++){
-			// std::cout<<"op <2.0>"<<std::endl;
-			// std::cout<<"this->trajectory size " <<this->trajectory.size()<<std::endl;
-			std::vector<Eigen::Vector3f> trajecotry_jacobian=this->velocity_finite_differencing_jacobian(this->trajectory,0.5);
 
-			//file write will write the entire trajectory for the iteration
-			// std::cout<<"op <2.1>"<<std::endl;
+		for (int i =0;i<this->max_iteration;i++){
+			std::vector<Eigen::Vector3f> trajecotry_jacobian=this->velocity_finite_differencing_jacobian(this->trajectory,0.5);
+			std::cout<<"trajectory size " <<this->trajectory.size()<<std::endl;
+			std::cout<<"trajectory jacobain size " <<trajecotry_jacobian.size()<<std::endl;
+
+			//save quivers[0]
 			if (write_to_file){
 				this->initial_trajectory_file<<std::endl;
-				Eigen::Matrix3f R=this->trajectory[0].get_rotation();
-				Eigen::Vector3f v_;
+				R=this->trajectory[0].get_rotation();
 				v_=this->c;
 				v_=R*v_;
-				// std::cout<<"op <2.2>"<<std::endl;
 				this->write_arrow_to_file(this->trajectory[0].get_position(),v_);
 			}
-			// std::cout<<"op <2>"<<std::endl;
+
+			//optimization
 			for (int j =0;j<trajecotry_jacobian.size();j++){
-				//print("trajecotry_jacobian[j]");
-				//print(trajecotry_jacobian[j]);
-				// print("trajecotry_jacobian.size()");
-				// print(trajecotry_jacobian.size());
-				// print("trajectory.size()");
-				// print(trajectory.size());
 				Eigen::Vector3f FOV_Jacobian,combined_Jacobian;
 				FOV_Jacobian=calculate_FOV_jacobian_for_pose(trajectory[j+1],i);
-				combined_Jacobian=FOV_Jacobian+trajecotry_jacobian[j];
+				// combined_Jacobian=FOV_Jacobian+trajecotry_jacobian[j];
 				combined_Jacobian=FOV_Jacobian;
-				Eigen::Matrix3f R=this->exp_map(combined_Jacobian)*(trajectory[j+1].get_rotation());
-				//R=this->exp_map(FOV_Jacobian)*(trajectory[j+1].get_rotation()); //overwrite, FOV only
-				this->trajectory[j+1].set_rotation(R);
-				Eigen::Vector3f v;
-				//v<<0,1,0;
-				v=this->c;
-				v=R*v;
+				R=this->exp_map(combined_Jacobian)*(trajectory[j+1].get_rotation());
+				// R=this->exp_map(FOV_Jacobian)*(trajectory[j+1].get_rotation()); //overwrite, FOV only
+				this->trajectory[j+1].set_rotation(R); //update rotation
+
+				//save optimization step quivers
+				Eigen::Vector3f v; v=this->c; v=R*v;
 				if (write_to_file){
-					this->write_arrow_to_file(this->trajectory[j+1].get_position(),v);
-					
+					this->write_arrow_to_file(this->trajectory[j+1].get_position(),v);	
 				}	
 			}
 
-			// std::cout<<"op <3>"<<std::endl;
-
+			//save quivers[last?]
 			if (write_to_file){
-				Eigen::Matrix3f R=this->trajectory.back().get_rotation();
-				Eigen::Vector3f v__;
+				R=this->trajectory.back().get_rotation();
 				v__=this->c;
 				v__=R*v__;
 				this->write_arrow_to_file(this->trajectory.back().get_position(),v__);
 			
 			}
-			// std::cout<<"op <4>"<<std::endl;
 		}
 
 		if (write_to_file){
 			for (PoseSE3 pose:this->trajectory){
 				Eigen::Matrix3f R=pose.get_rotation();
-				// std::cout<<"pose rotation"<<R <<std::endl;
-				Eigen::Vector3f v__;
-				//v__<<0,1,0;
 				v__=this->c;
 				v__=R*v__;
 
@@ -496,7 +597,7 @@ public:
 
 
 private:
-	Eigen::Vector3f v; //vector v seems to have no importance in theory, only as a reference
+	Eigen::Vector3f v;
 	std::vector<PoseSE3> trajectory;
 	std::string output_initial_trajectory_filename;
 	std::ofstream initial_trajectory_file;
