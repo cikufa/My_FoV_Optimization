@@ -27,6 +27,7 @@ public:
 
 	myTrajectoryOptimizerOnManifold(std::string output_initial_trajectory_filename, 
 		std::string output_initial_trajectory_filename_ue, 
+		std::string output_initial_trajectory_filename_twc, 
 		std::string input_pointcloud_filename,
 		std::string output_pointcloud_filename,
 		bool use_direction, bool use_uncertainty,
@@ -34,15 +35,18 @@ public:
 		std::string output_pointcloud_dir_filename,
 		std::string input_trajectory_file,
 		std::string output_trajectory_file, 
-		std::string output_trajectory_filename_ue){
+		std::string output_trajectory_filename_ue,
+		std::string output_trajectory_filename_twc){
 		
-		this->myinitialization(output_initial_trajectory_filename, output_initial_trajectory_filename_ue, input_pointcloud_filename,output_pointcloud_filename,use_direction,use_uncertainty,input_direction_and_uncertainty_filename,
-			output_pointcloud_dir_filename,input_trajectory_file,output_trajectory_file, output_trajectory_filename_ue);
+		this->myinitialization(output_initial_trajectory_filename, output_initial_trajectory_filename_ue, output_initial_trajectory_filename_twc,
+			input_pointcloud_filename,output_pointcloud_filename,use_direction,use_uncertainty,input_direction_and_uncertainty_filename,
+			output_pointcloud_dir_filename,input_trajectory_file,output_trajectory_file, output_trajectory_filename_ue, output_trajectory_filename_twc);
 	};
 
 	void myinitialization(
     const std::string& output_initial_trajectory_filename,
     const std::string& output_initial_trajectory_filename_ue,  //gotta have xyz matched with stamped_twc, and  yaw along path
+    const std::string& output_initial_trajectory_filename_twc,
     const std::string& input_pointcloud_filename,
     const std::string& output_pointcloud_filename,
     bool use_direction,
@@ -53,7 +57,8 @@ public:
 	
     const std::string& input_trajectory_file_name,
     const std::string& output_trajectory_filename,
-    const std::string& output_trajectory_filename_ue){
+    const std::string& output_trajectory_filename_ue,
+    const std::string& output_trajectory_filename_twc){
 		//ignore
 		this->use_uncertainty=use_uncertainty;
 		this->use_direction=use_direction;
@@ -64,14 +69,16 @@ public:
 		this->output_trajectory_file.open(output_trajectory_filename);
 
 		this->output_initial_trajectory_filename_ue = output_initial_trajectory_filename_ue;
+		this->output_initial_trajectory_filename_twc = output_initial_trajectory_filename_twc;
 		this->output_trajectory_filename_ue= output_trajectory_filename_ue;
+		this->output_trajectory_filename_twc= output_trajectory_filename_twc;
 
 		this->v<<1,1,1;
 		this->v=this->v/this->v.norm();
 		this->c<<1,0,0;
 		this->c=this->c/this->c.norm();
 		this->pcdfile.open(output_pointcloud_filename);
-		this->trajectory= this->import_trajectory(input_trajectory_file_name," ");
+		this->trajectory= this->import_trajectory(input_trajectory_file_name," ", true);
 		std::cout<<this->trajectory[1].get_position()<<std::endl;
 		std::cout<<this->trajectory[1].get_rotation()<<std::endl;
 		Eigen::Vector3f starting_position;
@@ -232,12 +239,40 @@ public:
 		std::cout << "Saved Unreal trajectory to " << filename << " (" << index << " poses)" << std::endl;
 	}
 
+	void saveTrajectoryAsTwcFormat(const std::vector<PoseSE3>& trajectory, const std::string& filename)
+	{
+		std::ofstream twcFile(filename);
+		if (!twcFile.is_open()) {
+			std::cerr << "Cannot open file: " << filename << std::endl;
+			return;
+		}
 
-    std::vector<PoseSE3> import_trajectory(std::string data_filename, std::string delimiter, bool use_input_yaw=false){
-        std::cout << "Import From stamped_twc_ue File: " << data_filename << std::endl;
+		twcFile << std::fixed << std::setprecision(8);
+		int index = 0;
+		for (const PoseSE3& pose : trajectory)
+		{
+			Eigen::Matrix4f Twc = Eigen::Matrix4f::Identity();
+			Twc.block<3,3>(0,0) = pose.get_rotation();
+			Twc.block<3,1>(0,3) = pose.get_position();
+
+			twcFile << index;
+			for (int i = 0; i < 4; ++i) {
+				for (int j = 0; j < 4; ++j) {
+					twcFile << " " << Twc(i,j);
+				}
+			}
+			twcFile << std::endl;
+			++index;
+		}
+
+		twcFile.close();
+		std::cout << "Saved Twc trajectory to " << filename << " (" << index << " poses)" << std::endl;
+	}
+
+
+    std::vector<PoseSE3> import_trajectory(std::string data_filename, std::string delimiter, bool use_input_yaw=true){
+        std::cout << "Import trajectory file: " << data_filename << std::endl;
         std::vector<PoseSE3> trajectory;
-        std::vector<Eigen::Matrix4f> twc_list;
-        std::vector<float> input_yaws;
         std::ifstream data_file(data_filename);
 
         if (!data_file.is_open()) {
@@ -245,79 +280,82 @@ public:
             return trajectory;
         }
 
+        bool format_decided = false;
+        bool matrix_mode = false;  // true if file is timestamp + 4x4 Twc matrix
+
         std::string line;
         int count = 0;
         
         while (std::getline(data_file, line)) {
-            // Skip empty lines and comment lines
             if (line.empty() || line[0] == '#') { continue; }
 
             std::vector<std::string> splitted_line = this->loader.split_string(line, delimiter);
-            Eigen::Vector3f ue_position;
-            ue_position << std::stof(splitted_line[1]),
-                           std::stof(splitted_line[2]),
-                           std::stof(splitted_line[3]);
-            Eigen::Vector3f ue_euler;
-            ue_euler << std::stof(splitted_line[4]),
-                        std::stof(splitted_line[5]),
-                        std::stof(splitted_line[6]);
+            if (!format_decided) {
+                // Twc matrix format: timestamp + 16 numbers -> 17 entries minimum
+                matrix_mode = splitted_line.size() >= 17;
+                format_decided = true;
+            }
 
-            Eigen::Matrix4f Twc = this->UEPoseToTwc(ue_position, ue_euler);
-            twc_list.push_back(Twc);
-            input_yaws.push_back(ue_euler[1]);
+            try {
+                if (matrix_mode) {
+                    if (splitted_line.size() < 17) {
+                        std::cerr << "Line " << count << " has insufficient entries for Twc matrix: "
+                                  << splitted_line.size() << std::endl;
+                        ++count;
+                        continue;
+                    }
+                    Eigen::Matrix4f Twc = Eigen::Matrix4f::Identity();
+                    for (int i = 0; i < 4; ++i) {
+                        for (int j = 0; j < 4; ++j) {
+                            int idx = 1 + i * 4 + j;  // skip timestamp
+                            Twc(i, j) = std::stof(splitted_line[idx]);
+                        }
+                    }
+                    Eigen::Vector3f position = Twc.block<3,1>(0,3);
+                    Eigen::Matrix3f rotation = Twc.block<3,3>(0,0);
+                    trajectory.emplace_back(position, rotation);
+                } else {
+                    if (splitted_line.size() < 7) {
+                        std::cerr << "Line " << count << " has insufficient entries for UE pose: "
+                                  << splitted_line.size() << std::endl;
+                        ++count;
+                        continue;
+                    }
+                    Eigen::Vector3f ue_position;
+                    ue_position << std::stof(splitted_line[1]),
+                                   std::stof(splitted_line[2]),
+                                   std::stof(splitted_line[3]);
+                    Eigen::Vector3f ue_euler;
+                    ue_euler << std::stof(splitted_line[4]),
+                                std::stof(splitted_line[5]),
+                                std::stof(splitted_line[6]);
+
+                    Eigen::Matrix4f Twc = this->UEPoseToTwc(ue_position, ue_euler);
+                    Eigen::Vector3f position = Twc.block<3,1>(0,3);
+                    Eigen::Matrix3f rotation = Twc.block<3,3>(0,0);
+                    trajectory.emplace_back(position, rotation);
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error parsing line " << count << ": " << e.what() << std::endl;
+                std::cerr << "Line content: " << line << std::endl;
+            }
 
             ++count;
         }
+
         data_file.close();
-
-        if (twc_list.empty()) {
-            return trajectory;
-        }
-
-        std::vector<float> path_yaws(twc_list.size(), 0.0f);
-        if (twc_list.size() > 1) {
-            for (size_t i = 0; i + 1 < twc_list.size(); ++i) {
-                Eigen::Vector3f current = twc_list[i].block<3,1>(0,3);
-                Eigen::Vector3f next = twc_list[i+1].block<3,1>(0,3);
-                Eigen::Vector3f delta = next - current;
-                if (delta.head<2>().norm() < 1e-6f && i > 0) {
-                    path_yaws[i] = path_yaws[i-1];
-                } else {
-                    float yaw_rad = std::atan2(delta[1], delta[0]);
-                    path_yaws[i] = yaw_rad * 180.0f / M_PI;
-                }
-            }
-            path_yaws.back() = path_yaws[path_yaws.size() - 2];
-        }
-
-        Eigen::Vector3f starting_position = twc_list.front().block<3,1>(0,3);
-        const std::vector<float>& yaw_source = use_input_yaw ? input_yaws : path_yaws;
-        Eigen::Matrix3f starting_rotation = this->Matrix_from_RPY_degree(0,0,yaw_source[0]);
-        Eigen::Vector3f starting_direction = starting_rotation * this->c;
-        // this->initial_trajectory_file<<std::to_string(starting_position[0])<<","<<std::to_string(starting_position[1])<<","<<std::to_string(starting_position[2])<<","<<std::to_string(starting_direction[0])<<","<<std::to_string(starting_direction[1])<<","<<std::to_string(starting_direction[2])<<std::endl;
-
-        for (size_t i = 0; i < twc_list.size(); ++i) {
-            Eigen::Vector3f position = twc_list[i].block<3,1>(0,3);
-            Eigen::Matrix3f rotation = this->Matrix_from_RPY_degree(0,0,yaw_source[i]);
-            PoseSE3 pose(position, rotation);
-            trajectory.push_back(pose);
-
-			//save initial trajectopry quivers
-            // Eigen::Vector3f direction = rotation * (this->c * 10.0f);
-            // this->initial_trajectory_file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","<<std::to_string(direction[0])<<","<<std::to_string(direction[1])<<","<<std::to_string(direction[2])<<std::endl;
-        }
-
+        std::cout << "Successfully imported " << trajectory.size() << " poses from " << count << " lines" << std::endl;
         return trajectory;
 
     }
 
-	Eigen::Matrix3f Matrix_from_RPY_degree(float x,float y,float z){//XYZ order, //degree
-	    Eigen::Matrix3f R;
-	    R= Eigen::AngleAxisf(x*M_PI/180.0, Eigen::Vector3f::UnitX())
-	  	* Eigen::AngleAxisf(y*M_PI/180.0, Eigen::Vector3f::UnitY())
-	  	* Eigen::AngleAxisf(z*M_PI/180.0, Eigen::Vector3f::UnitZ());
-	  	return R;
-	}
+	// Eigen::Matrix3f Matrix_from_RPY_degree(float x,float y,float z){//XYZ order, //degree
+	//     Eigen::Matrix3f R;
+	//     R= Eigen::AngleAxisf(x*M_PI/180.0, Eigen::Vector3f::UnitX())
+	//   	* Eigen::AngleAxisf(y*M_PI/180.0, Eigen::Vector3f::UnitY())
+	//   	* Eigen::AngleAxisf(z*M_PI/180.0, Eigen::Vector3f::UnitZ());
+	//   	return R;
+	// }
 
 	Eigen::Matrix3f skew(Eigen::Vector3f x){
 		Eigen::Matrix3f skew;
@@ -536,6 +574,7 @@ public:
 		Eigen::Matrix3f R;
 		Eigen::Vector3f v__, v_, v;
 		saveTrajectoryAsUE_Format(this->trajectory, this->output_initial_trajectory_filename_ue);
+		saveTrajectoryAsTwcFormat(this->trajectory, this->output_initial_trajectory_filename_twc);
 
 
 		for (int i =0;i<this->max_iteration;i++){
@@ -591,6 +630,7 @@ public:
 			}
 			//NOTE: added
 			saveTrajectoryAsUE_Format(this->trajectory, this->output_trajectory_filename_ue);
+			saveTrajectoryAsTwcFormat(this->trajectory, this->output_trajectory_filename_twc);
 		}
 	}
 
@@ -603,7 +643,9 @@ private:
 	std::ofstream initial_trajectory_file;
 	std::ofstream output_trajectory_file;
 	std::string output_initial_trajectory_filename_ue;
+	std::string output_initial_trajectory_filename_twc;
 	std::string output_trajectory_filename_ue;
+	std::string output_trajectory_filename_twc;
 	int max_iteration=30;
 	CloudLoader loader;
 	std::vector<Eigen::Vector3f> points_list;
