@@ -16,34 +16,21 @@
 #include <sstream>
 #include <cloud_loader.h>
 
-
-
-
-
 template <typename T> void print(T x)
 {
 
     std::cout<<x<<std::endl;
 }
 
-
-
-
-
-
-
-
 class TrajectoryOptimizerOnManifold{
 public:
 	TrajectoryOptimizerOnManifold(std::string output_initial_trajectory_filename,std::string input_pointcloud_filename,std::string output_pointcloud_filename,bool use_direction, bool use_uncertainty,std::string input_direction_and_uncertainty_filename,std::string output_pointcloud_dir_filename,std::string input_trajectory_file,std::string output_trajectory_file){
-
 		this->initialization(output_initial_trajectory_filename,input_pointcloud_filename,output_pointcloud_filename,use_direction,use_uncertainty,input_direction_and_uncertainty_filename,output_pointcloud_dir_filename,input_trajectory_file,output_trajectory_file);
 	
 	};
 
 
 	TrajectoryOptimizerOnManifold(std::string output_initial_trajectory_filename,std::string output_pointcloud_filename,std::vector<Eigen::Vector3f> pos,std::vector<float> yaw,std::vector<Eigen::Vector3f> pointcloud){
-
 		this->initialization(output_initial_trajectory_filename,output_pointcloud_filename,pos,yaw,pointcloud);
 	}
 
@@ -51,7 +38,7 @@ public:
 		this->output_initial_trajectory_filename=output_initial_trajectory_filename;
 		this->initial_trajectory_file.open(this->output_initial_trajectory_filename);
 
-		this->v<<1,1,1;
+		this->v<<1,1+,1;
 		this->v=this->v/this->v.norm();
 		this->c<<1,0,0;
 		this->c=this->c/this->c.norm();
@@ -63,9 +50,6 @@ public:
 		this->trajectory= import_trajectory(pos,yaw);
 		//this->loader.ImportFromXyzFile(input_pointcloud_filename,1,true,false,",");
 
-
-
-
 		for (Eigen::Vector3f point:pointcloud){
 			this->montecarlopointsfile<<point[0]<<","<<point[1]<<","<<point[2]<<std::endl;
 		}
@@ -76,8 +60,6 @@ public:
 			this->valid_points.push_back(i);
 		}		
 	}
-
-
 
 
 	void initialization(std::string output_initial_trajectory_filename,std::string input_pointcloud_filename,std::string output_pointcloud_filename,bool use_direction,bool use_uncertainty,std::string input_direction_and_uncertainty_filename,std::string output_pointcloud_dir_filename,std::string input_trajectory_file_name,std::string output_trajectory_file_name){
@@ -106,8 +88,6 @@ public:
 		if(this->use_direction||this->use_uncertainty){
 				this->loader.ImportFromDirUncertaintyFile(input_direction_and_uncertainty_filename,1," ");
 		}
-
-
 		//save pointcloud
 		for (Eigen::Vector3f point:this->loader.get_pointcloud()){
 			this->montecarlopointsfile<<point[0]<<","<<point[1]<<","<<point[2]<<std::endl;
@@ -131,12 +111,7 @@ public:
 			this->valid_points.push_back(i);
 		}
 
-		
-
-
-
 	}
-
 
 	
 	Eigen::Matrix3f skew(Eigen::Vector3f x){
@@ -157,7 +132,7 @@ public:
 		return exp_map;
     }
 
-
+	// set each cam pose as frame coordinate reference and express pointcould w.r.t that.  
 	void populate_local_indexes(Eigen::Vector3f ref_point){
 		Eigen::Vector3f pos=ref_point;
 		// print_string("ref_point");
@@ -212,9 +187,8 @@ public:
 		}
 	}
 
-
+// NOTE:rotational velocity constraint (dont use for baseline experiment)
    	///velocity finite differencing- sum terms
-
 	std::vector<Eigen::Vector3f> velocity_finite_differencing_jacobian(std::vector<PoseSE3> starting_trajectory,float step_size){
 		std::vector<Eigen::Vector3f> trajecotry_jacobian;
 	   	//suppose rotation velocity difference is   R2R1^T,  R1 is the earlier rotation, R2 is the later rotation
@@ -233,30 +207,6 @@ public:
 	   	}
 	   	return trajecotry_jacobian;
    	}
-
- //   ///acceleration finite differencing - sum terms
-	// std::vector<Eigen::Vector3f> acceleration_finite_differencing_jacobian(std::vector<PoseSE3> starting_trajectory){
-	// 	Eigen::Vector3f trajecotry_jacobian;
-	//    	//suppose rotation velocity difference is   R2R1^T,  R1 is the earlier rotation, R2 is the later rotation
-	//    	for (int i =1;i<starting_trajectory.size()-1;i++){ //restric to elements that are not the head or the tail of the vector
-	//    		//jacobian as the start
-	//    		Eigen::Vector3f K_2=this->v.transpose();
-	//    		Eigen::Vector3f C_2=(starting_trajectory[i].get_rotation())*(starting_trajectory[i-1].get_rotation().transpose())*this->v;
-	//    		Eigen::Vector3f later_J=get_Jacobian_from_K_and_C(K_2[0],K_2[1],K_2[2],C_2[0],C_2[1],C_2[2]);
-	//    		//jacobian as the mid
-	//    		Eigen::Vector3f K_1=(this->v.transpose())*(starting_trajectory[i+1].get_rotation())*(starting_trajectory[i].get_rotation().transpose());
-	//    		Eigen::Vector3f C_1=this->v;
-	//    		Eigen::Vector3f early_J=get_Jacobian_of_transposed_exp_from_K_and_C(K_1[0],K_1[1],K_1[2],C_1[0],C_1[1],C_1[2]);
-	//    		//jacobian as the later
-
-	//    		//store into vector
-	//    		trajecotry_jacobian.push_back(later_J+early_J);
-	//    	}
-	//    	return trajecotry_jacobian;
- //   	}
-   ///
-
-
 
 	Eigen::Vector3f get_Jacobian_from_K_and_C(float K1,float K2,float K3,float C1,float C2,float C3){
 		Eigen::Vector3f J;
@@ -280,15 +230,11 @@ public:
    	}
 
 
-
-
-   	std::vector<PoseSE3>  import_trajectory(std::vector<Eigen::Vector3f> traj_positions, std::vector<float>  yaws){
+   	std::vector<PoseSE3> import_trajectory(std::vector<Eigen::Vector3f> traj_positions, std::vector<float> yaws){
    			std::vector<PoseSE3> trajectory;
    			Eigen::Vector3f dummy_vector;
 
    			this->Matrix_from_RPY_degree(0,0,yaws[0]);
-
-
 
    			dummy_vector=this->c;
    			Eigen::Matrix3f starting_rotation=this->Matrix_from_RPY_degree(0,0,yaws[0]);
@@ -300,7 +246,7 @@ public:
    			//for (Eigen::Vector3f pos:traj_positions){
    				
 	   			Eigen::Vector3f v,rotated_v,R_input_rotated_v,current_position;
-	   			v=(this->c)*10.0;
+	   			v=(this->c)*10.0; //NOTE: whats 10
 	   			Eigen::Matrix3f current_rotation=this->Matrix_from_RPY_degree(0,0,yaws[i]);
 	   			rotated_v=current_rotation*v;
 	   			current_position=traj_positions[i];
@@ -310,10 +256,7 @@ public:
    			}
 
    			return trajectory;
-
    	}
-
-
 
    	std::vector<PoseSE3>  generate_trajectory_start(bool smooth,float interval_length,int waypoint_count, Eigen::Vector3f starting_position,Eigen::Matrix3f starting_rotation){
    		std::vector<PoseSE3> trajectory;
@@ -350,31 +293,11 @@ public:
    		return trajectory;	   			
    	}
 
-   	// std::vector<PoseSE3>  generate_trajectory_start_end(float interval_length,int waypoint_count,){
-   	// 	std::vector<PoseSE3> trajectory;
-   	// 	Eigen::Vector3f current_position;
-
-		   			
-   	// }
-
-   	// std::vector<PoseSE3>  import_trajectory(std::string filename){
-   	// 	std::vector<PoseSE3> trajectory;
-   	// 	Eigen::Vector3f current_position;
-
-		   			
-   	// }
-
-
    	Eigen::Matrix3f Matrix_from_RPY_degree(float x,float y,float z){//XYZ order, //degree
 	    Eigen::Matrix3f R;
 	    R= Eigen::AngleAxisf(x*M_PI/180.0, Eigen::Vector3f::UnitX())
 	  	* Eigen::AngleAxisf(y*M_PI/180.0, Eigen::Vector3f::UnitY())
 	  	* Eigen::AngleAxisf(z*M_PI/180.0, Eigen::Vector3f::UnitZ());
-
-
-
-
-
 	  	return R;
 	}
    	//import or generate trajectory
@@ -394,29 +317,10 @@ public:
  		Eigen::Vector3f aJ_l;
  		aJ_l<<0,0,0;
  		float residual=0.0;
- 		//print_string("residual before");
- 		//print_float(residual);
-// 			for K_ in self.K_list:
  		int counter=0;
- 		for(Eigen::Vector3f K_: this->points_list){//#
- 			//print_string("start jacobian");
- 			//print_eigen_v(K_);
-// 				K=K_*self.R
-// 				#c=
-// 				#print (K)
-// 				#print (K[0,1])
-// 				C1=self.c[0,0]
-// 				C2=self.c[1,0]
-// 				C3=self.c[2,0]
-// 				K1=K[0,0]
-// 				K2=K[0,1]
-// 				K3=K[0,2]
+ 		for(Eigen::Vector3f K_: this->points_list){
 
  			Eigen::Vector3f K=(K_.transpose())*R; //# this -R
- 			// print_string("K");
- 			// print_eigen_v(K);
- 			// print_string("this->c");
- 			// print_eigen_v(this->c);
  			float C1=this->c[0];  //#this->c
  			float C2=this->c[1];
  			float C3=this->c[2];
@@ -425,28 +329,9 @@ public:
  			float K3=K[2];
 
 
-// 				#print (C1,C2,C3)
-// 				#print (K1,K2,K3)
-// 				#print("list",[C2*K3-C3*K2,C3*K1-C1*K3,C1*K2-C2*K1])
-// 				J=np.matrix([C2*K3-C3*K2,C3*K1-C1*K3,C1*K2-C2*K1]).transpose()
-// 				F_Jacobian=J
-// 				if self.optimize_visibility==True:
-// 					KTRC=K_*self.R*self.c
-// 					#holder=
-// 					F_Jacobian=2*self.alpha2*KTRC[0,0]*J+self.alpha1*J
-// 				if self.optimize_visibility_sigmoid==True:
-// 					u=KTRC=K_*self.R*self.c
-// 					w=(-1.0)*self.ks*(u-math.cos(self.visibility_alpha))
-// 					v=math.exp(w)
-// 					coeff=(-1.0)*((1+v)**(-2))*v*(0.0-self.ks)
-// 					F_Jacobian=coeff*J
-
  			Eigen::Vector3f F_Jacobian=this->get_Jacobian_from_K_and_C(K1,K2,K3,C1,C2,C3); //jacobian function
  			Eigen::Vector3f J=F_Jacobian;
- 			// print_string("J");
- 			// print_eigen_v(J);
- 			// print_string("F_Jacobian-j");
- 			// print_eigen_v(F_Jacobian);
+ 		
  			if (this->optimize_visibility_sigmoid==true){   //optimize visibility sigmoid
  				float u,KTRC;
  				u=(K_.transpose())*(R)*this->c;
@@ -505,23 +390,8 @@ public:
 			 F_Jacobian=F_Jacobian*distance_weight;
 
 		
-   		// print_string("F_Jacobian F_Jacobian");
-   		//std::cout << typeid(F_Jacobian).name() << std::endl;
-   		//std::cout<<F_Jacobian<<std::endl;
-   		// print_eigen_v(F_Jacobian);
-
-// 				#print (J)
-// 				alpha=.001
-// 				#alpha=(F_Jacobian.transpose()*F_Jacobian)[0,0]
-// 				#print("F_Jacobian.transpose()*F_Jacobian",F_Jacobian.transpose()*F_Jacobian)
-// 				#print ("alpha",alpha)
-// 				if True:
-// 					alpha=1
-// 				aJ=alpha*F_Jacobian
+   		
 		Eigen::Vector3f aJ=F_Jacobian;
-
-// 				aJ_l=[aJ_l[0]+aJ[0,0],aJ_l[1]+aJ[1,0],aJ_l[2]+aJ[2,0]]
-		//aj_l<<aJ_l[0]+aJ[0],aJ_l[1]+aJ[1],aJ_l[2]+aJ[2];
 		aJ_l=aJ_l+aJ;
 		counter++;
 		}
@@ -610,9 +480,45 @@ public:
 				this->write_arrow_to_output_file(pose.get_position(),v__);
 			}
 		}
-
-
 	}
+
+	//NOTE: added by me /not tested
+	double optimizeWithTiming(const std::string& input_trajectory_file, 
+                             const std::string& output_trajectory_file,
+                             const std::string& pointcloud_file,
+                             bool use_direction = false,
+                             bool use_uncertainty = false,
+                             const std::string& direction_uncertainty_file = "") {
+        
+        // Start timing
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        // Initialize with your trajectory file
+        this->initialization(
+            "initial_trajectory_temp.txt",  // temp file for initial trajectory
+            pointcloud_file,
+            "optimized_pointcloud_temp.txt", // temp output
+            use_direction,
+            use_uncertainty,
+            direction_uncertainty_file,
+            "pointcloud_dir_temp.txt",
+            input_trajectory_file,
+            output_trajectory_file
+        );
+        
+        // Run optimization
+        this->optimize(true);  // Set to true to write output
+        
+        // End timing
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> duration = end_time - start_time;
+        
+        std::cout << "Optimization completed in: " << duration.count() << " seconds" << std::endl;
+        
+        return duration.count();
+    }
+
+}
 
 
 private:
@@ -647,11 +553,5 @@ private:
 
 	float closest;
 	float furthest;
-
 };
-
-
-
-
-
 #endif
