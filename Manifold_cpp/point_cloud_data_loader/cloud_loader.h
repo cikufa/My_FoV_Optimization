@@ -19,19 +19,22 @@ public:
 	}
 
 
-	Eigen::Matrix3f get_rotation(){
-		return this->rotation;
 
-	}
 	void set_rotation(Eigen::Matrix3f rot){
 		this->rotation=rot;
 
 	}
+	Eigen::Vector3f get_position() const { return position; }
+	Eigen::Matrix3f get_rotation() const { return rotation; }
 
-	Eigen::Vector3f get_position(){
-		return this->position;
+	// Eigen::Matrix3f get_rotation(){
+	// 	return this->rotation;
 
-	}
+	// }
+	// Eigen::Vector3f get_position(){
+	// 	return this->position;
+
+	// }
 
 	void set_position(Eigen::Vector3f p){
 		this->position=p;
@@ -169,46 +172,6 @@ public:
 		return trajectory;
 	}
 
-	// std::vector<PoseSE3> Import_From_stamped_twc_File(std::string data_filename, std::string delimiter) {
-	// 	std::cout << "Import From stamped_twc File:" << data_filename << std::endl;
-		
-	// 	std::vector<PoseSE3> trajectory;
-	// 	this->filename = data_filename;
-	// 	this->data_file.open(this->filename);
-
-	// 	if (!this->data_file.is_open()) {
-	// 		std::cerr << "Failed to open the file for reading." << std::endl;
-	// 		return trajectory;
-	// 	}
-
-	// 	std::string line;
-	// 	int count = 0;
-		
-	// 	while (getline(this->data_file, line)) {
-	// 		std::vector<std::string> splitted_line = this->split_string(line, delimiter);
-		
-	// 		Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
-			
-	// 		for (int i = 0; i < 4; i++) {
-	// 			for (int j = 0; j < 4; j++) {
-	// 				int idx = i * 4 + j;
-	// 				transform(i, j) = std::stof(splitted_line[idx]);
-	// 			}
-	// 		}
-
-	// 		Eigen::Vector3f position = transform.block<3, 1>(0, 3);  // Translation part
-	// 		Eigen::Matrix3f rotation = transform.block<3, 3>(0, 0);  // Rotation part
-	// 		PoseSE3 pose(position, rotation);
-	// 		trajectory.push_back(pose);
-	// 		count += 1;
-	// 	}
-
-	// 	this->data_file.close();
-	// 	std::cout << "Imported " << trajectory.size() << " poses from 4x4 matrices" << std::endl;
-	// 	return trajectory;
-	// }
-	
-	
 	std::vector<PoseSE3> Import_From_stamped_twc_File(std::string data_filename, std::string delimiter) {
 		std::cout << "Import From stamped_twc File: " << data_filename << std::endl;
 		
@@ -226,12 +189,10 @@ public:
 		
 		while (getline(this->data_file, line)) {
 			// Skip empty lines and comment lines
-			if (line.empty() || line[0] == '#') {
-				continue;
-			}
+			if (line.empty() || line[0] == '#') { continue; }
 
 			std::vector<std::string> splitted_line = this->split_string(line, delimiter);
-			
+		
 			// Your format has 26 entries: timestamp + 16 matrix + 9 unknown
 			// We need at least 17 (timestamp + 16 matrix values)
 			if (splitted_line.size() < 17) {
@@ -276,6 +237,91 @@ public:
 		return trajectory;
 	}
 	
+
+//NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:
+
+// 	std::vector<PoseSE3> Import_From_stamped_twc_File(std::string data_filename, std::string delimiter) {
+// 		std::cout << "Import From stamped_twc File: " << data_filename << std::endl;
+
+// 		std::vector<Eigen::Vector3f> positions;
+// 		this->filename = data_filename;
+// 		this->data_file.open(this->filename);
+
+// 		if (!this->data_file.is_open()) {
+// 			std::cerr << "Failed to open the file for reading." << std::endl;
+// 			return {};
+// 		}
+
+// 		std::string line;
+// 		int count = 0;
+// 		while (getline(this->data_file, line)) {
+// 			if (line.empty() || line[0] == '#') continue;
+
+// 			std::vector<std::string> splitted_line = this->split_string(line, delimiter);
+
+// 			if (splitted_line.size() < 4) {
+// 				std::cerr << "Line " << count << ": Expected at least 4 values, got " 
+// 						<< splitted_line.size() << ". Skipping line." << std::endl;
+// 				count++;
+// 				continue;
+// 			}
+
+// 			try {
+// 				// index 1, 2, 3 correspond to x, y, z
+// 				float x = std::stof(splitted_line[1]);
+// 				float y = std::stof(splitted_line[2]);
+// 				float z = std::stof(splitted_line[3]);
+// 				positions.emplace_back(x, y, z);
+// 			} 
+// 			catch (const std::exception& e) {
+// 				std::cerr << "Error parsing line " << count << ": " << e.what() << std::endl;
+// 			}
+// 			count++;
+// 		}
+
+// 		this->data_file.close();
+
+// 		// compute new orientations based on direction between poses
+// 		std::vector<PoseSE3> trajectory = computeAlignedYawPitchRoll(positions);
+
+// 		std::cout << "Successfully imported " << trajectory.size() 
+// 				<< " poses from " << count << " lines" << std::endl;
+
+// 		return trajectory;
+// 	}
+
+// 	std::vector<PoseSE3> computeAlignedYawPitchRoll(const std::vector<Eigen::Vector3f>& positions){
+// 		std::vector<PoseSE3> aligned_poses;
+// 		int N = positions.size();
+
+// 		for (int i = 0; i < N; ++i) {
+// 			Eigen::Vector3f pos = positions[i];
+// 			Eigen::Matrix3f rot = Eigen::Matrix3f::Identity();
+
+// 			if (i < N - 1) {
+// 				Eigen::Vector3f dir = (positions[i + 1] - positions[i]).normalized();
+
+// 				// assume x-axis should point along path direction
+// 				Eigen::Vector3f x_axis = dir;
+// 				Eigen::Vector3f z_axis(0, 0, 1); // pick arbitrary up vector (z-axis)
+// 				if (fabs(x_axis.dot(z_axis)) > 0.99f) {
+// 					z_axis = Eigen::Vector3f(0, 1, 0); // handle near vertical path
+// 				}
+// 				Eigen::Vector3f y_axis = z_axis.cross(x_axis).normalized();
+// 				z_axis = x_axis.cross(y_axis).normalized();
+
+// 				rot.col(0) = x_axis;
+// 				rot.col(1) = y_axis;
+// 				rot.col(2) = z_axis;
+// 			}
+
+// 			aligned_poses.emplace_back(pos, rot);
+// 		}
+// 		return aligned_poses;
+// }
+
+//NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:NOTE:
+
 	void ImportFromTxtFile(std::string data_filename, std::string delimiter) {
 		this->filename = data_filename;
 		this->data_file.open(this->filename);
@@ -312,66 +358,96 @@ public:
 		this->data_file.close();
 	}
 	
+	void ImportFromXyzFile(std::string data_filename, int downsample_factor, bool simple, bool trim_floor, std::string delimiter) {
+		std::cout << "ImportFromXyzFile: " << data_filename << std::endl;
+		
+		this->filename = data_filename;
+		this->data_file.open(this->filename);
+		
+		if (!this->data_file.is_open()) {
+			std::cerr << "Failed to open the file for reading." << std::endl;
+			return;
+		}
 
-	void ImportFromXyzFile(std::string data_filename,int downsample_factor,bool simple,bool trim_floor,std::string delimiter){
-		//std::cout<<"<1> ImportFromXyzFile"<<std::endl;
-		this->filename=data_filename;
-
-		this->data_file.open (this->filename);
-	    if (!this->data_file.is_open()) {
-	        std::cerr << "Failed to open the file for reading." << std::endl;
-	    } else {
-	        // std::cout << "File opened successfully for reading." << std::endl;
-	        // You can read from the file here.
-	    }
-		//std::cout<<"<1.1>"<<std::endl;
 		std::string line;
-		int count=0;
-		while (getline (this->data_file, line)) {
-			/*NOTE:NOTE: i commented */
-			if (count==0){
-				count+=1;
-				// continue;
-			}
-			if (count%downsample_factor!=0) {
-				count+=1;
+		int count = 0;
+		int success_count = 0;
+		
+		while (getline(this->data_file, line)) {
+			// Skip empty lines and comments
+			if (line.empty() || line[0] == '#') {
 				continue;
 			}
-			// 	count+=1
-			// 	continue 
-		  // Output the text from the file
-			// line.pop_back();
-		 	//std::cout << line;
-		 	std::vector<std::string> splitted_line=this->split_string(line,delimiter);
-		 	float x=std::stof(splitted_line[0]);
-		 	float y=std::stof(splitted_line[1]);
-		 	float z=std::stof(splitted_line[2]);
-		 	float r,g,b;
-		 	if (simple==false){
-			 	r=std::stof(splitted_line[3]);
-			 	g=std::stof(splitted_line[4]);
-			 	b=std::stof(splitted_line[5]);
-		 	}
-		 	if (trim_floor==true){
-			 	if (z<6){
-			 		continue;
-			 	}
-			}
-			Eigen::Vector3f v;
-			if (simple==true){
-				v<<x,y,z;
-			}
-			this->set_A.push_back(v);
-			count+=1;
 
+			// Skip based on downsample factor
+			if (count % downsample_factor != 0) {
+				count++;
+				continue;
+			}
 
+			try {
+				std::vector<std::string> splitted_line = this->split_string(line, delimiter);
+				
+				// Validate we have enough elements
+				if (simple) {
+					if (splitted_line.size() < 3) {
+						std::cerr << "Line " << count << ": Expected at least 3 values for simple format, got " << splitted_line.size() << std::endl;
+						count++;
+						continue;
+					}
+				} else {
+					if (splitted_line.size() < 6) {
+						std::cerr << "Line " << count << ": Expected at least 6 values for RGB format, got " << splitted_line.size() << std::endl;
+						count++;
+						continue;
+					}
+				}
+
+				// Parse coordinates
+				float x = std::stof(splitted_line[0]);
+				float y = std::stof(splitted_line[1]);
+				float z = std::stof(splitted_line[2]);
+				
+				float r = 0, g = 0, b = 0;
+				if (!simple) {
+					r = std::stof(splitted_line[3]);
+					g = std::stof(splitted_line[4]);
+					b = std::stof(splitted_line[5]);
+				}
+
+				// Apply floor trimming
+				if (trim_floor && z < 6) {
+					count++;
+					continue;
+				}
+
+				// Add to point cloud
+				Eigen::Vector3f v;
+				v << x, y, z;
+				this->set_A.push_back(v);
+				success_count++;
+				
+			} catch (const std::invalid_argument& e) {
+				std::cerr << "ERROR: Invalid number format on line " << count << std::endl;
+				std::cerr << "Error: " << e.what() << std::endl;
+				std::cerr << "Line: " << line << std::endl;
+			} catch (const std::out_of_range& e) {
+				std::cerr << "ERROR: Number out of range on line " << count << std::endl;
+				std::cerr << "Error: " << e.what() << std::endl;
+				std::cerr << "Line: " << line << std::endl;
+			} catch (const std::exception& e) {
+				std::cerr << "ERROR: Unexpected error on line " << count << std::endl;
+				std::cerr << "Error: " << e.what() << std::endl;
+				std::cerr << "Line: " << line << std::endl;
+			}
+			
+			count++;
 		}
-		//std::cout<<"<2>"<<std::endl;
-		// for (Eigen::Vector3f v:this->set_A){
-		// 	print_eigen_v(v);
-		// }
+
 		this->data_file.close();
+		std::cout << "Successfully imported " << success_count << " points from " << count << " lines" << std::endl;
 	}
+
 
 	std::vector<Eigen::Vector3f> get_pointcloud (void){
 		return this->set_A;

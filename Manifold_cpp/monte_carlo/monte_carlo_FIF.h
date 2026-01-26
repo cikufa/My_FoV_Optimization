@@ -13,7 +13,7 @@ public:
 
 		this->loader=new CloudLoader;
 		/*NOTE:I relaxed the map file name for convenient while debuging*/
-		this->loader->ImportFromXyzFile("/home/shekoufeh/Desktop/FOV-Optimization-on-Manifold-main/Map/two_walls_points_w.csv",1,true,false,",");
+		this->loader->ImportFromXyzFile("/home/shekoufeh/fov_ws/My_FoV_Optimization/Map/two_walls_points_w.csv",1,true,false,",");
 
 		this->optimizer_monte_carlo_total_time_us=0;
 		this->optimizer_monte_carlo_average_time_us=0;
@@ -41,7 +41,7 @@ public:
 		this->loader2->ImportFromXyzFile("../../brute_force_xyz_indexes_two_degree.csv",1,true,false,",");
 		this->loader3=new CloudLoader;
 		// this->loader3->ImportFromXyzFile("../../Map/sampledtwc.csv",1,true,false,",");
-		this->loader3->ImportFromXyzFile("/home/shekoufeh/FIF_ws/src/rpg_information_field/act_map/fovtrace/sampledtwc100.csv",1,true,false,",");
+		this->loader3->ImportFromXyzFile("/home/shekoufeh/fov_ws/my_FIF-perception-aware-planning/act_map/fovtrace/sampledtwc100.csv",1,true,false,",");
 
 		
 	}

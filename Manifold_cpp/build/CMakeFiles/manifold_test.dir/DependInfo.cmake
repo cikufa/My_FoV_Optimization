@@ -1,27 +1,18 @@
+
+# Consider dependencies only in project.
+set(CMAKE_DEPENDS_IN_PROJECT_ONLY OFF)
+
 # The set of languages for which implicit dependencies are needed:
 set(CMAKE_DEPENDS_LANGUAGES
-  "CXX"
-  )
-# The set of files for implicit dependencies of each language:
-set(CMAKE_DEPENDS_CHECK_CXX
-  "/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/manifold_test.cpp" "/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/CMakeFiles/manifold_test.dir/manifold_test.cpp.o"
-  )
-set(CMAKE_CXX_COMPILER_ID "GNU")
-
-# The include file search paths:
-set(CMAKE_CXX_TARGET_INCLUDE_PATH
-  "../manifold"
-  "../point_cloud_data_loader"
-  "../monte_carlo"
-  "../experiment_manager"
   )
 
-# Targets to which this target links.
-set(CMAKE_TARGET_LINKED_INFO_FILES
-  "/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/manifold/CMakeFiles/manifold.dir/DependInfo.cmake"
-  "/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/point_cloud_data_loader/CMakeFiles/cloud_loader.dir/DependInfo.cmake"
-  "/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/monte_carlo/CMakeFiles/montecarlo.dir/DependInfo.cmake"
-  "/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/experiment_manager/CMakeFiles/e_manager.dir/DependInfo.cmake"
+# The set of dependency files which are needed:
+set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/manifold_test.cpp" "CMakeFiles/manifold_test.dir/manifold_test.cpp.o" "gcc" "CMakeFiles/manifold_test.dir/manifold_test.cpp.o.d"
+  )
+
+# Targets to which this target links which contain Fortran sources.
+set(CMAKE_Fortran_TARGET_LINKED_INFO_FILES
   )
 
 # Fortran module output directory.

@@ -1,4 +1,4 @@
-# Install script for directory: /home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp
+# Install script for directory: /home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -37,29 +37,34 @@ if(NOT DEFINED CMAKE_CROSSCOMPILING)
   set(CMAKE_CROSSCOMPILING "FALSE")
 endif()
 
-if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  # Include the install script for the subdirectory.
-  include("/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/manifold/cmake_install.cmake")
+# Set default install directory permissions.
+if(NOT DEFINED CMAKE_OBJDUMP)
+  set(CMAKE_OBJDUMP "/usr/bin/objdump")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/point_cloud_data_loader/cmake_install.cmake")
+  include("/home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/build/manifold/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/monte_carlo/cmake_install.cmake")
+  include("/home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/build/point_cloud_data_loader/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/experiment_manager/cmake_install.cmake")
+  include("/home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/build/monte_carlo/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/trajectory_optimization_on_manifold/cmake_install.cmake")
+  include("/home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/build/experiment_manager/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("/home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/build/trajectory_optimization_on_manifold/cmake_install.cmake")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT)
@@ -70,5 +75,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "/home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/build/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "/home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/build/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

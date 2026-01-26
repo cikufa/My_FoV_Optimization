@@ -12,9 +12,9 @@ set -euo pipefail
 #   ./scripts/fov_registration_pipeline.sh
 ###############################################################################
 
-FOVTEST_DIR=~/my_FIF-perception-aware-planning/act_map_exp/localization/fovtest
+FOVTEST_DIR=~/fov_ws/my_FIF-perception-aware-planning/act_map_exp/localization/fovtest
 COLMAP_SCRIPTS=../colmap_scripts
-isaac_dir=~/my_FIF-perception-aware-planning/warehouse_bin/LinuxNoEditor
+isaac_dir=~/fov_ws/my_FIF-perception-aware-planning/warehouse_bin/LinuxNoEditor
 
 cd "$isaac_dir"
 "./IsaacSimProject.sh" &
@@ -36,13 +36,14 @@ python3 "$COLMAP_SCRIPTS/register_images_to_model.py" ./ \
   --img_nm_to_colmap_cam_list ../fovtest/images/rel_img_nm_to_cam_list.txt
 
 python3 "$COLMAP_SCRIPTS/calculate_pose_errors.py" \
+
   --reg_model_dir ./fov_sparse \
   --reg_img_name_to_colmap_Tcw ../fovtest/img_name_to_colmap_Tcw.txt \
   --reg_img_dir ../fovtest/images \
   --output_path ./
 
 if [[ -n "${QUIVER_BEFORE:-}" && -n "${QUIVER_AFTER:-}" ]]; then
-  python3 ../tools/quiver_viz.py \
+  python3 "$COLMAP_SCRIPTS/quiver_viz.py" \
     --before "$QUIVER_BEFORE" \
     --after "$QUIVER_AFTER" \
     --save "${QUIVER_OUTPUT:-quiver_comparison.png}"

@@ -59,7 +59,25 @@
         "variant": "cpp",
         "core": "cpp",
         "dense": "cpp",
-        "geometry": "cpp"
+        "geometry": "cpp",
+        "bit": "cpp",
+        "codecvt": "cpp",
+        "compare": "cpp",
+        "concepts": "cpp",
+        "condition_variable": "cpp",
+        "list": "cpp",
+        "unordered_set": "cpp",
+        "mutex": "cpp",
+        "numbers": "cpp",
+        "ranges": "cpp",
+        "semaphore": "cpp",
+        "span": "cpp",
+        "stop_token": "cpp",
+        "typeindex": "cpp",
+        "__nullptr": "cpp",
+        "queue": "cpp",
+        "stack": "cpp",
+        "__split_buffer": "cpp"
     },
     "C_Cpp.errorSquiggles": "disabled"
 }

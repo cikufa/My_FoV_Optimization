@@ -1,5 +1,6 @@
 file(REMOVE_RECURSE
   "CMakeFiles/manifold_test.dir/manifold_test.cpp.o"
+  "CMakeFiles/manifold_test.dir/manifold_test.cpp.o.d"
   "manifold_test"
   "manifold_test.pdb"
 )

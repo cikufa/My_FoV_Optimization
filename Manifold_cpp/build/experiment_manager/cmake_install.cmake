@@ -1,4 +1,4 @@
-# Install script for directory: /home/chen/FOV_Optimization_On_Manifold_/Manifold_cpp/experiment_manager
+# Install script for directory: /home/shekoufeh/fov_ws/My_FoV_Optimization/Manifold_cpp/experiment_manager
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -35,5 +35,10 @@ endif()
 # Is this installation the result of a crosscompile?
 if(NOT DEFINED CMAKE_CROSSCOMPILING)
   set(CMAKE_CROSSCOMPILING "FALSE")
+endif()
+
+# Set default install directory permissions.
+if(NOT DEFINED CMAKE_OBJDUMP)
+  set(CMAKE_OBJDUMP "/usr/bin/objdump")
 endif()
 
