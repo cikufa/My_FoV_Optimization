@@ -30,7 +30,6 @@ template <typename T> void print(T x)
 class myTrajectoryOptimizerOnManifold{
 public:
 
-
    myTrajectoryOptimizerOnManifold(std::string output_initial_trajectory_filename,
        std::string output_initial_trajectory_filename_ue,
        std::string output_initial_trajectory_filename_twc,
@@ -49,6 +48,49 @@ public:
            output_pointcloud_dir_filename,input_trajectory_file,output_trajectory_file, output_trajectory_filename_ue, output_trajectory_filename_twc);
    };
 
+   void set_max_iteration(int value) {
+       if (value > 0) {
+           this->max_iteration = value;
+       }
+   }
+
+   void set_ks(double value) {
+       if (value > 0.0) {
+           this->ks = value;
+       }
+   }
+
+   void set_visibility_angle_deg(float value) {
+       if (value > 0.0f) {
+           this->visibility_angle = value;
+           this->visibility_alpha = value * M_PI / 180.0;
+       }
+   }
+
+   void set_base_step_scale(float value) {
+       if (value > 0.0f) {
+           this->base_step_scale = value;
+       }
+   }
+
+   void set_step_limits_deg(float min_deg, float max_deg) {
+       if (min_deg > 0.0f) {
+           this->min_step_rad = min_deg * M_PI / 180.0f;
+       }
+       if (max_deg > 0.0f) {
+           this->max_step_rad = max_deg * M_PI / 180.0f;
+       }
+   }
+
+   void set_trajectory_jacobian_step(float value) {
+       if (value > 0.0f) {
+           this->trajectory_jacobian_step = value;
+       }
+   }
+
+   void set_log_jacobian(bool enabled) {
+       this->log_jacobian = enabled;
+   }
 
    void myinitialization(
    const std::string& output_initial_trajectory_filename,
@@ -122,12 +164,10 @@ public:
 
        this->valid_points.clear();
 
-
        for (size_t i=0;i<this->loader.get_pointcloud().size();i++){
            this->valid_points.push_back(i);
        }
    }
-
 
    // UE pose conversion based on unrealcv_bridge ue_conversions.py and esim_utils.hpp.
    double clampAxis(double angle_deg)
@@ -246,7 +286,6 @@ public:
        return Twc_d.cast<float>();
    }
 
-
    void saveTrajectoryAsUE_Format(const std::vector<PoseSE3>& trajectory, const std::string& filename)
    {
        std::ofstream ueFile(filename);
@@ -318,7 +357,6 @@ public:
        twcFile.close();
        std::cout << "Saved Twc trajectory to " << filename << " (" << index << " poses)" << std::endl;
    }
-
 
    std::vector<PoseSE3> import_trajectory(std::string data_filename, std::string delimiter, bool use_input_yaw=true){
        std::cout << "Import trajectory file: " << data_filename << std::endl;
@@ -406,7 +444,6 @@ public:
 
 
    }
-
    // Eigen::Matrix3f Matrix_from_RPY_degree(float x,float y,float z){//XYZ order, //degree
    //     Eigen::Matrix3f R;
    //     R= Eigen::AngleAxisf(x*M_PI/180.0, Eigen::Vector3f::UnitX())
@@ -414,7 +451,6 @@ public:
    //      * Eigen::AngleAxisf(z*M_PI/180.0, Eigen::Vector3f::UnitZ());
    //      return R;
    // }
-
    Eigen::Matrix3f skew(Eigen::Vector3f x){
        Eigen::Matrix3f skew;
        skew << 0, -x[2], x[1],
@@ -436,8 +472,6 @@ public:
    // set each cam pose as frame coordinate reference and express pointcould w.r.t that. 
    void populate_local_indexes(Eigen::Vector3f ref_point){
        Eigen::Vector3f pos=ref_point;
-       // print_string("ref_point");
-       // print_eigen_v(ref_point);
        this->points_list.clear();
        this->points_list_unnormalized.clear();
        std::vector<Eigen::Vector3f> pointcloud_dir;
@@ -471,13 +505,8 @@ public:
            // print_eigen_v(point_pos);
           
            this->points_list_unnormalized.push_back(point_pos);
-
-
            point_pos=point_pos/point_pos.norm();  //candidate to remove
            this->points_list.push_back(point_pos);
-
-
-
 
            if(this->use_direction||this->use_uncertainty){
                Eigen::Vector3f point_dir=pointcloud_dir[i];
@@ -512,7 +541,6 @@ public:
        }
        return trajecotry_jacobian;
    }
-
    Eigen::Vector3f get_Jacobian_from_K_and_C(float K1,float K2,float K3,float C1,float C2,float C3){
        Eigen::Vector3f J;
        float a=C2*K3-C3*K2;
@@ -542,85 +570,80 @@ public:
        this->output_trajectory_file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","<<std::to_string(ray_direction[0])<<","<<std::to_string(ray_direction[1])<<","<<std::to_string(ray_direction[2])<<std::endl;
    }
 
- Eigen::Vector3f calculate_FOV_jacobian_for_pose(PoseSE3 pos,int iteration_count){
-   this->populate_local_indexes(pos.get_position());
-   Eigen::Matrix3f R=pos.get_rotation();
-       Eigen::Vector3f aJ_l;
-       aJ_l<<0,0,0;
-       float residual=0.0;
-       int counter=0;
-       for(Eigen::Vector3f K_: this->points_list){
+   Eigen::Vector3f calculate_FOV_jacobian_for_pose(PoseSE3 pos,int iteration_count){
+    this->populate_local_indexes(pos.get_position());
+    Eigen::Matrix3f R=pos.get_rotation();
+        Eigen::Vector3f aJ_l;
+        aJ_l<<0,0,0;
+        float residual=0.0;
+        int counter=0;
+        for(Eigen::Vector3f K_: this->points_list){
+            Eigen::Vector3f K=(K_.transpose())*R; //# this -R
+            float C1=this->c[0];  
+            float C2=this->c[1];
+            float C3=this->c[2];
+            float K1=K[0];
+            float K2=K[1];
+            float K3=K[2];  //NOTE: c nabayad R* this->c bashe inja ke mese paper beshe ? Na doroste
 
+            Eigen::Vector3f F_Jacobian=this->get_Jacobian_from_K_and_C(K1,K2,K3,C1,C2,C3); //jacobian function return c x k
+            Eigen::Vector3f J=F_Jacobian;
+        
+            if (this->optimize_visibility_sigmoid==true){   //optimize visibility sigmoid
+                float u,KTRC;
+                u=(K_.transpose())*(R)*this->c;
+                KTRC=u;
+                residual=residual+KTRC;
 
-           Eigen::Vector3f K=(K_.transpose())*R; //# this -R
-           float C1=this->c[0];  //#this->c
-           float C2=this->c[1];
-           float C3=this->c[2];
-           float K1=K[0];
-           float K2=K[1];
-           float K3=K[2];
+                float visibility_alpha;
+                if(iteration_count/this->max_iteration<0.05){
+                        visibility_alpha=this->visibility_alpha_180;
+                }else if(iteration_count/this->max_iteration>=0.05 && iteration_count/this->max_iteration<0.1){
+                        visibility_alpha=this->visibility_alpha_90;
+                }else if(iteration_count/this->max_iteration>=0.1 && iteration_count/this->max_iteration<0.15){
+                        visibility_alpha=this->visibility_alpha_60;
+                }else{
+                        visibility_alpha=this->visibility_alpha;
+                }
 
-           Eigen::Vector3f F_Jacobian=this->get_Jacobian_from_K_and_C(K1,K2,K3,C1,C2,C3); //jacobian function
-           Eigen::Vector3f J=F_Jacobian;
-      
-           if (this->optimize_visibility_sigmoid==true){   //optimize visibility sigmoid
-               float u,KTRC;
-               u=(K_.transpose())*(R)*this->c;
-               KTRC=u;
-               residual=residual+KTRC;
+                float w=(-1.0)*this->ks*(u-cos(visibility_alpha)); //visibility_alpha, this->ks
+                float v=exp(w);
+                float coeff=(-1.0)*(pow((1+v),(-2))*v*(0.0-this->ks));
+                F_Jacobian=coeff*J;
+            }
 
-               float visibility_alpha;
-               if(iteration_count/this->max_iteration<0.05){
-                    visibility_alpha=this->visibility_alpha_180;
-               }else if(iteration_count/this->max_iteration>=0.05 && iteration_count/this->max_iteration<0.1){
-                    visibility_alpha=this->visibility_alpha_90;
-               }else if(iteration_count/this->max_iteration>=0.1 && iteration_count/this->max_iteration<0.15){
-                    visibility_alpha=this->visibility_alpha_60;
-               }else{
-                    visibility_alpha=this->visibility_alpha;
-               }
+                // if self.use_direction==True:
+            float alpha=4.0;
+            if(this->use_direction){
 
-               float w=(-1.0)*this->ks*(u-cos(visibility_alpha)); //visibility_alpha, this->ks
-               float v=exp(w);
-               float coeff=(-1.0)*(pow((1+v),(-2))*v*(0.0-this->ks));
-               F_Jacobian=coeff*J;
-           }
+                //  direction_dot=np.matrix(K)*np.matrix(self.direction_list[kk]).transpose()
+                float direction_dot=(K.transpose()*this->points_dir_list[counter]);
+                //  print("final coeff",1.0-np.abs(direction_dot[0,0]))
+                if(this->DEBUG){
+                    // std::cout<<"direction_dot is " <<direction_dot<<std::endl;
+                }
+                //  alpha=alpha*(1.0-np.abs(direction_dot[0,0]))
+                alpha=alpha*(1.0-fabs(direction_dot));
+                F_Jacobian=F_Jacobian*alpha;
+            }
 
-               // if self.use_direction==True:
-           float alpha=4.0;
-           if(this->use_direction){
+            float uncertainty_alpha=3;
+            if(this->use_uncertainty){
+                    float point_uncertainty=this->points_uncertainty_list[counter];
+                    uncertainty_alpha=1.0*point_uncertainty/this->max_uncertainty;
+                    F_Jacobian=F_Jacobian*uncertainty_alpha;
+            }
 
-               //  direction_dot=np.matrix(K)*np.matrix(self.direction_list[kk]).transpose()
-               float direction_dot=(K.transpose()*this->points_dir_list[counter]);
-               //  print("final coeff",1.0-np.abs(direction_dot[0,0]))
-               if(this->DEBUG){
-                   // std::cout<<"direction_dot is " <<direction_dot<<std::endl;
-               }
-               //  alpha=alpha*(1.0-np.abs(direction_dot[0,0]))
-               alpha=alpha*(1.0-fabs(direction_dot));
-               F_Jacobian=F_Jacobian*alpha;
-           }
+                float distance=this->points_list_unnormalized[counter].norm();
+                float distance_weight=1.0-(distance-this->closest)/(this->furthest-this->closest);
+                F_Jacobian=F_Jacobian*distance_weight;
 
-           float uncertainty_alpha=3;
-           if(this->use_uncertainty){
-                float point_uncertainty=this->points_uncertainty_list[counter];
-                uncertainty_alpha=1.0*point_uncertainty/this->max_uncertainty;
-                F_Jacobian=F_Jacobian*uncertainty_alpha;
-           }
-
-            float distance=this->points_list_unnormalized[counter].norm();
-            float distance_weight=1.0-(distance-this->closest)/(this->furthest-this->closest);
-            F_Jacobian=F_Jacobian*distance_weight;
-
-       Eigen::Vector3f aJ=F_Jacobian;
-       aJ_l=aJ_l+aJ;
-       counter++;
-       }
-       float step_size=(10/(this->points_list.size()*M_PI*2));
-
-       aJ_l=aJ_l*step_size;
-       return aJ_l;
- }
+        Eigen::Vector3f aJ=F_Jacobian;
+        aJ_l=aJ_l+aJ;
+        counter++;
+        }
+        return aJ_l;
+    }
 
    void optimize(bool write_to_file){
        Eigen::Matrix3f R;
@@ -629,7 +652,8 @@ public:
        saveTrajectoryAsTwcFormat(this->trajectory, this->output_initial_trajectory_filename_twc); //should match stamped_twc that we read as input(checking purpose) 
 
        for (int i =0;i<this->max_iteration;i++){
-           std::vector<Eigen::Vector3f> trajecotry_jacobian=this->velocity_finite_differencing_jacobian(this->trajectory,0.5);
+           std::vector<Eigen::Vector3f> trajecotry_jacobian=
+               this->velocity_finite_differencing_jacobian(this->trajectory, this->trajectory_jacobian_step);
            std::cout<<"trajectory size " <<this->trajectory.size()<<std::endl;
            std::cout<<"trajectory jacobain size " <<trajecotry_jacobian.size()<<std::endl;
 
@@ -653,9 +677,26 @@ public:
 					std::cout<<"iter "<<i<<" pose "<<(j+1)<<" jacobian "<<combined_Jacobian.transpose()
 					         <<" norm "<<combined_Jacobian.norm()<<std::endl;
 				}
-				R=this->exp_map(combined_Jacobian)*(trajectory[j+1].get_rotation());
+				R = trajectory[j+1].get_rotation();
+				const float jacobian_norm = combined_Jacobian.norm();
+				if (jacobian_norm > 1e-9f) {
+                   const float base_step =
+                       this->base_step_scale / std::max(1.0f, static_cast<float>(this->points_list.size()));
+                   const float min_step = this->min_step_rad;
+                   const float max_step = this->max_step_rad;
+					float step = base_step;
+					float delta_norm = step * jacobian_norm;
+					if (delta_norm < min_step) {
+						step = min_step / jacobian_norm;
+					}
+					if (delta_norm > max_step) {
+						step = max_step / jacobian_norm;
+					}
+					const Eigen::Vector3f delta = step * combined_Jacobian;
+					R = this->exp_map(delta) * R;
+				}
 				// R=this->exp_map(FOV_Jacobian)*(trajectory[j+1].get_rotation()); //overwrite, FOV only
-				this->trajectory[j+1].set_rotation(R); //update rotation
+               this->trajectory[j+1].set_rotation(R); //update rotation
 
 
                //save optimization step quivers
@@ -723,11 +764,15 @@ private:
    std::vector<size_t> valid_points;
 
 
-	bool use_uncertainty=false;
-	bool use_direction=false;
-	float max_uncertainty=0;
-	bool DEBUG=false;
-	bool log_jacobian=true;
+   bool use_uncertainty=false;
+   bool use_direction=false;
+   float max_uncertainty=0;
+   bool DEBUG=false;
+   bool log_jacobian=true;
+   float base_step_scale=1.0f;
+   float min_step_rad=0.25f * M_PI / 180.0f;
+   float max_step_rad=5.0f * M_PI / 180.0f;
+   float trajectory_jacobian_step=0.5f;
 
 
    float closest;
