@@ -21,8 +21,6 @@
 
 template <typename T> void print(T x)
 {
-
-
    std::cout<<x<<std::endl;
 }
 
@@ -82,6 +80,15 @@ public:
        }
    }
 
+   void set_fov_schedule_deg(const std::vector<float>& schedule_deg) {
+       this->fov_schedule_rad.clear();
+       for (float value : schedule_deg) {
+           if (value > 0.0f) {
+               this->fov_schedule_rad.push_back(value * M_PI / 180.0f);
+           }
+       }
+   }
+
    void set_trajectory_jacobian_step(float value) {
        if (value > 0.0f) {
            this->trajectory_jacobian_step = value;
@@ -129,8 +136,8 @@ public:
        this->c=this->c/this->c.norm();
        this->pcdfile.open(output_pointcloud_filename);
        this->trajectory= this->import_trajectory(input_trajectory_file_name," ", true);
-       std::cout<<this->trajectory[1].get_position()<<std::endl;
-       std::cout<<this->trajectory[1].get_rotation()<<std::endl;
+    //    std::cout<<this->trajectory[1].get_position()<<std::endl;
+    //    std::cout<<this->trajectory[1].get_rotation()<<std::endl;
        Eigen::Vector3f starting_position;
        // starting_position<<this->trajectory->position;
        // starting_position = this->trajectory[0].get_position();
@@ -150,7 +157,7 @@ public:
            this->pcdfile<<point[0]<<","<<point[1]<<","<<point[2]<<std::endl;
        }
        this->pcdfile.close();
-       std::cout<<"pcd entries written: "<<this->loader.get_pointcloud().size()<<std::endl;
+    //    std::cout<<"pcd entries written: "<<this->loader.get_pointcloud().size()<<std::endl;
 
 
        //save pointcloud_dir and uncertainty
@@ -318,7 +325,7 @@ public:
 
 
        ueFile.close();
-       std::cout << "Saved Unreal trajectory to " << filename << " (" << index << " poses)" << std::endl;
+    //    std::cout << "Saved Unreal trajectory to " << filename << " (" << index << " poses)" << std::endl;
    }
 
    void saveTrajectoryAsTwcFormat(const std::vector<PoseSE3>& trajectory,
@@ -355,11 +362,11 @@ public:
 
 
        twcFile.close();
-       std::cout << "Saved Twc trajectory to " << filename << " (" << index << " poses)" << std::endl;
+    //    std::cout << "Saved Twc trajectory to " << filename << " (" << index << " poses)" << std::endl;
    }
 
    std::vector<PoseSE3> import_trajectory(std::string data_filename, std::string delimiter, bool use_input_yaw=true){
-       std::cout << "Import trajectory file: " << data_filename << std::endl;
+    //    std::cout << "Import trajectory file: " << data_filename << std::endl;
        imported_times_.clear();
        std::vector<PoseSE3> trajectory;
        std::ifstream data_file(data_filename);
@@ -439,7 +446,7 @@ public:
 
 
        data_file.close();
-       std::cout << "Successfully imported " << trajectory.size() << " poses from " << count << " lines" << std::endl;
+    //    std::cout << "Successfully imported " << trajectory.size() << " poses from " << count << " lines" << std::endl;
        return trajectory;
 
 
@@ -458,6 +465,7 @@ public:
             -x[1], x[0], 0;
        return skew;
    }
+
    Eigen::Matrix3f exp_map(Eigen::Vector3f phi){
        Eigen::Matrix3f skew_phi_matrix=this->skew(phi);
        Eigen::Matrix3f I=Eigen::Matrix<float, 3, 3>::Identity();
@@ -595,16 +603,7 @@ public:
                 KTRC=u;
                 residual=residual+KTRC;
 
-                float visibility_alpha;
-                if(iteration_count/this->max_iteration<0.05){
-                        visibility_alpha=this->visibility_alpha_180;
-                }else if(iteration_count/this->max_iteration>=0.05 && iteration_count/this->max_iteration<0.1){
-                        visibility_alpha=this->visibility_alpha_90;
-                }else if(iteration_count/this->max_iteration>=0.1 && iteration_count/this->max_iteration<0.15){
-                        visibility_alpha=this->visibility_alpha_60;
-                }else{
-                        visibility_alpha=this->visibility_alpha;
-                }
+                float visibility_alpha = GetVisibilityAlpha(iteration_count);
 
                 float w=(-1.0)*this->ks*(u-cos(visibility_alpha)); //visibility_alpha, this->ks
                 float v=exp(w);
@@ -654,8 +653,8 @@ public:
        for (int i =0;i<this->max_iteration;i++){
            std::vector<Eigen::Vector3f> trajecotry_jacobian=
                this->velocity_finite_differencing_jacobian(this->trajectory, this->trajectory_jacobian_step);
-           std::cout<<"trajectory size " <<this->trajectory.size()<<std::endl;
-           std::cout<<"trajectory jacobain size " <<trajecotry_jacobian.size()<<std::endl;
+        //    std::cout<<"trajectory size " <<this->trajectory.size()<<std::endl;
+        //    std::cout<<"trajectory jacobain size " <<trajecotry_jacobian.size()<<std::endl;
 
 
            //save quivers[0]
@@ -674,8 +673,8 @@ public:
 				// combined_Jacobian=FOV_Jacobian+trajecotry_jacobian[j];
 				combined_Jacobian=FOV_Jacobian;
 				if (log_jacobian){
-					std::cout<<"iter "<<i<<" pose "<<(j+1)<<" jacobian "<<combined_Jacobian.transpose()
-					         <<" norm "<<combined_Jacobian.norm()<<std::endl;
+					// std::cout<<"iter "<<i<<" pose "<<(j+1)<<" jacobian "<<combined_Jacobian.transpose()
+					        //  <<" norm "<<combined_Jacobian.norm()<<std::endl;
 				}
 				R = trajectory[j+1].get_rotation();
 				const float jacobian_norm = combined_Jacobian.norm();
@@ -734,6 +733,30 @@ public:
    }
 
 private:
+   float GetVisibilityAlpha(int iteration_count) const {
+       if (!this->fov_schedule_rad.empty()) {
+           const int stages = static_cast<int>(this->fov_schedule_rad.size());
+           const int stage_len = std::max(1, this->max_iteration / stages);
+           int stage_idx = iteration_count / stage_len;
+           if (stage_idx >= stages) {
+               stage_idx = stages - 1;
+           }
+           return this->fov_schedule_rad[stage_idx];
+       }
+       const float ratio = static_cast<float>(iteration_count) /
+                           std::max(1, this->max_iteration);
+       if (ratio < 0.05f) {
+           return this->visibility_alpha_180;
+       }
+       if (ratio < 0.1f) {
+           return this->visibility_alpha_90;
+       }
+       if (ratio < 0.15f) {
+           return this->visibility_alpha_60;
+       }
+       return this->visibility_alpha;
+   }
+
    Eigen::Vector3f v;
    std::vector<PoseSE3> trajectory;
    std::vector<double> imported_times_;
@@ -773,6 +796,7 @@ private:
    float min_step_rad=0.25f * M_PI / 180.0f;
    float max_step_rad=5.0f * M_PI / 180.0f;
    float trajectory_jacobian_step=0.5f;
+   std::vector<float> fov_schedule_rad;
 
 
    float closest;

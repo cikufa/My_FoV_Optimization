@@ -175,6 +175,42 @@ bool ReadEnvBool(const char* name, bool* out) {
 	return true;
 }
 
+bool FileExists(const std::string& path) {
+	std::ifstream in(path);
+	return in.good();
+}
+
+std::string ReadEnvString(const char* name) {
+	const char* raw = std::getenv(name);
+	if (!raw || !*raw) {
+		return std::string();
+	}
+	return std::string(raw);
+}
+
+bool ReadEnvFloatList(const char* name, std::vector<float>* out) {
+	const char* raw = std::getenv(name);
+	if (!raw || !*raw) {
+		return false;
+	}
+	std::stringstream ss(raw);
+	std::string token;
+	bool any = false;
+	while (std::getline(ss, token, ',')) {
+		if (token.empty()) {
+			continue;
+		}
+		char* endptr = nullptr;
+		const float value = std::strtof(token.c_str(), &endptr);
+		if (endptr == token.c_str()) {
+			continue;
+		}
+		out->push_back(value);
+		any = true;
+	}
+	return any;
+}
+
 void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	int max_iter = 0;
 	if (ReadEnvInt("FOV_OPT_MAX_ITER", &max_iter)) {
@@ -203,6 +239,10 @@ void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	if (ReadEnvFloat("FOV_OPT_TRAJ_JAC_STEP", &traj_jac_step)) {
 		optimizer.set_trajectory_jacobian_step(traj_jac_step);
 	}
+	std::vector<float> fov_schedule;
+	if (ReadEnvFloatList("FOV_OPT_FOV_SCHEDULE", &fov_schedule)) {
+		optimizer.set_fov_schedule_deg(fov_schedule);
+	}
 	bool log_jacobian = false;
 	if (ReadEnvBool("FOV_OPT_LOG_JACOBIAN", &log_jacobian)) {
 		optimizer.set_log_jacobian(log_jacobian);
@@ -211,9 +251,7 @@ void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 }  // namespace
 
 int main(int argc, char *argv[]){
-	std::cout<<"<1>"<<std::endl;
 	if (argc < 3 || argc > 5) {
-		std::cout<<"Usage: manifold_test_trajectory <input_dir> <output_dir> [along_path (0/1)] [points3d_path]"<<std::endl;
 		return 0;
 	}
 	std::string input_dir(argv[1]);
@@ -222,7 +260,6 @@ int main(int argc, char *argv[]){
 	if (argc >= 4) {
 		along_path = (std::stoi(argv[3]) != 0);
 	}
-	std::cout<<"<2>"<<std::endl;
 
 	std::string output_pointcloud_file(JoinPath(output_dir, "trajectory_pointcloud.csv"));
 	std::string input_file("/home/shekoufeh/fov_ws/my_FIF-perception-aware-planning/act_map_exp/localization/warehouse_base/sparse/0/points3D.txt");
@@ -271,13 +308,23 @@ int main(int argc, char *argv[]){
 		output_initial_file_ue = JoinPath(output_dir, "initial_trajectory_ue.txt");
 		output_initial_file_twc = JoinPath(output_dir, "initial_trajectory_twc.txt");
 	}
+
+	std::string warm_start_flag = ReadEnvString("FOV_OPT_WARM_START");
+	if (!warm_start_flag.empty() && std::stoi(warm_start_flag) != 0) {
+		std::string warm_start_file = ReadEnvString("FOV_OPT_WARM_START_FILE");
+		std::string candidate = warm_start_file.empty() ? output_trajectory_file_twc : warm_start_file;
+		if (!candidate.empty() && FileExists(candidate)) {
+			input_trajectory_file = candidate;
+		} else {
+			std::cerr << "Warm start enabled but file not found: " << candidate << std::endl;
+		}
+	}
 		
 		
 	std::string output_pointcloud_dir_file(" ");
 	std::string input_dir_file(" ");
 
 
-	std::cout<<"<3>"<<std::endl;
 	bool use_direction=false;
 	bool use_uncertainty=false;
 	// TrajectoryOptimizerOnManifold traj_op(output_file,input_file,output_pointcloud_file,use_direction,use_uncertainty,input_dir_file,output_pointcloud_dir_file,input_trajectory_file,output_trajectory_file);
@@ -286,9 +333,7 @@ int main(int argc, char *argv[]){
 		output_pointcloud_dir_file,input_trajectory_file,output_trajectory_file, output_trajectory_file_ue, output_trajectory_file_twc);
 	ApplyEnvOverrides(traj_op);
 
-	std::cout<<"<4>"<<std::endl;
 	traj_op.optimize(true);
 		
-	std::cout<<"<5>"<<std::endl;
 
 }
