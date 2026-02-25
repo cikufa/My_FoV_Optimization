@@ -10,6 +10,7 @@
 #include <eigen3/Eigen/Geometry>
 #include <cmath>
 #include <time.h>
+#include <cstdlib>
 #include <vector>
 #include <typeinfo>
 #include <chrono>
@@ -17,6 +18,8 @@
 #include <sstream>
 #include <cloud_loader.h>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
 
 
 template <typename T> void print(T x)
@@ -27,8 +30,12 @@ template <typename T> void print(T x)
 
 class myTrajectoryOptimizerOnManifold{
 public:
+   enum StepNormMode {
+       kStepNormPoints = 0,
+       kStepNormJacobian = 1,
+   };
 
-   myTrajectoryOptimizerOnManifold(std::string output_initial_trajectory_filename,
+   myTrajectoryOptimizerOnManifold(std::string quivers_filename,
        std::string output_initial_trajectory_filename_ue,
        std::string output_initial_trajectory_filename_twc,
        std::string input_pointcloud_filename,
@@ -41,7 +48,7 @@ public:
        std::string output_trajectory_filename_ue,
        std::string output_trajectory_filename_twc){
       
-       this->myinitialization(output_initial_trajectory_filename, output_initial_trajectory_filename_ue, output_initial_trajectory_filename_twc,
+       this->myinitialization(quivers_filename, output_initial_trajectory_filename_ue, output_initial_trajectory_filename_twc,
            input_pointcloud_filename,output_pointcloud_filename,use_direction,use_uncertainty,input_direction_and_uncertainty_filename,
            output_pointcloud_dir_filename,input_trajectory_file,output_trajectory_file, output_trajectory_filename_ue, output_trajectory_filename_twc);
    };
@@ -55,6 +62,16 @@ public:
    void set_ks(double value) {
        if (value > 0.0) {
            this->ks = value;
+       }
+   }
+
+   void set_ks_from_visibility(bool enabled) {
+       this->ks_from_visibility = enabled;
+   }
+
+   void set_ks_transition_deg(float value) {
+       if (value > 0.0f) {
+           this->ks_transition_deg = value;
        }
    }
 
@@ -98,9 +115,103 @@ public:
    void set_log_jacobian(bool enabled) {
        this->log_jacobian = enabled;
    }
+   void set_debug_log_enabled(bool enabled) {
+       this->debug_log_enabled = enabled;
+   }
+   void set_debug_log_path(const std::string& path) {
+       this->debug_log_path = path;
+       this->debug_log_enabled = true;
+   }
+
+   void set_step_norm_mode(const std::string& mode) {
+       std::string lower = mode;
+       std::transform(lower.begin(), lower.end(), lower.begin(),
+                      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+       if (lower == "jacobian" || lower == "jac") {
+           this->step_norm_mode = kStepNormJacobian;
+       } else if (lower == "points" || lower == "point") {
+           this->step_norm_mode = kStepNormPoints;
+       }
+   }
+
+   void set_adaptive_step_enabled(bool enabled) {
+       this->adaptive_step_enabled = enabled;
+   }
+
+   void set_min_step_decay(float value) {
+       if (value >= 0.0f) {
+           this->min_step_decay_strength = value;
+       }
+   }
+
+   void set_max_step_decay(float value) {
+       if (value >= 0.0f) {
+           this->max_step_decay_strength = value;
+       }
+   }
+
+   void set_adapt_max_clip_thresh(float value) {
+       if (value >= 0.0f) {
+           this->adapt_max_clip_thresh = value;
+       }
+   }
+
+   void set_adapt_min_clip_thresh(float value) {
+       if (value >= 0.0f) {
+           this->adapt_min_clip_thresh = value;
+       }
+   }
+
+   void set_adapt_low_max_clip_thresh(float value) {
+       if (value >= 0.0f) {
+           this->adapt_low_max_clip_thresh = value;
+       }
+   }
+
+   void set_adapt_low_min_clip_thresh(float value) {
+       if (value >= 0.0f) {
+           this->adapt_low_min_clip_thresh = value;
+       }
+   }
+
+   void set_adapt_shrink_factor(float value) {
+       if (value > 0.0f) {
+           this->adapt_shrink_factor = value;
+       }
+   }
+
+   void set_adapt_grow_high_min_factor(float value) {
+       if (value > 0.0f) {
+           this->adapt_grow_high_min_factor = value;
+       }
+   }
+
+   void set_adapt_grow_low_clip_factor(float value) {
+       if (value > 0.0f) {
+           this->adapt_grow_low_clip_factor = value;
+       }
+   }
+
+   void set_adapt_scale_min(float value) {
+       if (value > 0.0f) {
+           this->adapt_scale_min = value;
+           if (this->adapt_scale_min > this->adapt_scale_max) {
+               this->adapt_scale_max = this->adapt_scale_min;
+           }
+       }
+   }
+
+   void set_adapt_scale_max(float value) {
+       if (value > 0.0f) {
+           this->adapt_scale_max = value;
+           if (this->adapt_scale_min > this->adapt_scale_max) {
+               this->adapt_scale_min = this->adapt_scale_max;
+           }
+       }
+   }
 
    void myinitialization(
-   const std::string& output_initial_trajectory_filename,
+   const std::string& quivers_filename,
    const std::string& output_initial_trajectory_filename_ue,  //gotta have xyz matched with stamped_twc, and  yaw along path
    const std::string& output_initial_trajectory_filename_twc,
    const std::string& input_pointcloud_filename,
@@ -120,10 +231,12 @@ public:
        this->use_direction=use_direction;
        this->montecarlopointsdirfile.open(output_pointcloud_dir_filename);
 
-       this->output_initial_trajectory_filename=output_initial_trajectory_filename;
+       this->quivers_filename=quivers_filename;
 	   this->output_initial_trajectory_filename_ue = output_initial_trajectory_filename_ue;
        this->output_initial_trajectory_filename_twc = output_initial_trajectory_filename_twc;
-    	this->initial_trajectory_file.open(this->output_initial_trajectory_filename);
+       this->quivers_metrics_filename =
+           AppendSuffixBeforeExtension(this->quivers_filename, "_metrics");
+       this->quivers_metrics_file.open(this->quivers_metrics_filename);
 
 	   this->output_trajectory_file.open(output_trajectory_filename);
        this->output_trajectory_filename_ue= output_trajectory_filename_ue;
@@ -571,6 +684,9 @@ public:
    }
 
    void write_arrow_to_file(Eigen::Vector3f position,Eigen::Vector3f ray_direction){
+       if (!this->initial_trajectory_file.is_open()) {
+           return;
+       }
        this->initial_trajectory_file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","<<std::to_string(ray_direction[0])<<","<<std::to_string(ray_direction[1])<<","<<std::to_string(ray_direction[2])<<std::endl;
     }
 
@@ -578,13 +694,32 @@ public:
        this->output_trajectory_file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","<<std::to_string(ray_direction[0])<<","<<std::to_string(ray_direction[1])<<","<<std::to_string(ray_direction[2])<<std::endl;
    }
 
-   Eigen::Vector3f calculate_FOV_jacobian_for_pose(PoseSE3 pos,int iteration_count){
+   void write_arrow_with_metrics(std::ofstream& file, Eigen::Vector3f position,
+                                 Eigen::Vector3f ray_direction,
+                                 float visible_count, float visibility_score){
+       if (!file.is_open()) {
+           return;
+       }
+       file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","
+           <<std::to_string(ray_direction[0])<<","<<std::to_string(ray_direction[1])<<","<<std::to_string(ray_direction[2])<<","
+           <<std::to_string(visible_count)<<","<<std::to_string(visibility_score)
+           <<std::endl;
+   }
+
+   Eigen::Vector3f calculate_FOV_jacobian_for_pose(PoseSE3 pos,int iteration_count,
+                                                   float* visible_count = nullptr,
+                                                   float* visibility_score = nullptr){
     this->populate_local_indexes(pos.get_position());
     Eigen::Matrix3f R=pos.get_rotation();
         Eigen::Vector3f aJ_l;
         aJ_l<<0,0,0;
         float residual=0.0;
         int counter=0;
+        const double ks_iter = GetKsForIteration(iteration_count);
+        const float visibility_alpha = GetVisibilityAlpha(iteration_count);
+        const float cos_alpha = std::cos(visibility_alpha);
+        float vis_count_local = 0.0f;
+        float vis_score_local = 0.0f;
         for(Eigen::Vector3f K_: this->points_list){
             Eigen::Vector3f K=(K_.transpose())*R; //# this -R
             float C1=this->c[0];  
@@ -596,18 +731,32 @@ public:
 
             Eigen::Vector3f F_Jacobian=this->get_Jacobian_from_K_and_C(K1,K2,K3,C1,C2,C3); //jacobian function return c x k
             Eigen::Vector3f J=F_Jacobian;
+
+            const float u = (K_.transpose())*(R)*this->c;
+            if (visible_count) {
+                if (u >= cos_alpha) {
+                    vis_count_local += 1.0f;
+                }
+            }
+            if (visibility_score) {
+                float score = 0.0f;
+                if (this->optimize_visibility_sigmoid) {
+                    const float w = (-1.0f) * static_cast<float>(ks_iter) * (u - cos_alpha);
+                    score = 1.0f / (1.0f + std::exp(w));
+                } else {
+                    score = (u >= cos_alpha) ? 1.0f : 0.0f;
+                }
+                vis_score_local += score;
+            }
         
             if (this->optimize_visibility_sigmoid==true){   //optimize visibility sigmoid
-                float u,KTRC;
-                u=(K_.transpose())*(R)*this->c;
+                float KTRC;
                 KTRC=u;
                 residual=residual+KTRC;
 
-                float visibility_alpha = GetVisibilityAlpha(iteration_count);
-
-                float w=(-1.0)*this->ks*(u-cos(visibility_alpha)); //visibility_alpha, this->ks
+                float w=(-1.0f)*static_cast<float>(ks_iter)*(u-cos_alpha);
                 float v=exp(w);
-                float coeff=(-1.0)*(pow((1+v),(-2))*v*(0.0-this->ks));
+                float coeff=(-1.0f)*(pow((1+v),(-2))*v*(0.0f-static_cast<float>(ks_iter)));
                 F_Jacobian=coeff*J;
             }
 
@@ -641,6 +790,12 @@ public:
         aJ_l=aJ_l+aJ;
         counter++;
         }
+        if (visible_count) {
+            *visible_count = vis_count_local;
+        }
+        if (visibility_score) {
+            *visibility_score = vis_score_local;
+        }
         return aJ_l;
     }
 
@@ -650,59 +805,186 @@ public:
        saveTrajectoryAsUE_Format(this->trajectory, this->output_initial_trajectory_filename_ue); //should match stamped_twc_ue that we read as input(checking purpose) 
        saveTrajectoryAsTwcFormat(this->trajectory, this->output_initial_trajectory_filename_twc); //should match stamped_twc that we read as input(checking purpose) 
 
+       std::ofstream debug_log;
+       bool debug_log_active = false;
+       if (this->debug_log_enabled) {
+           std::string log_path;
+           if (!this->debug_log_path.empty()) {
+               if (HasPathSeparator(this->debug_log_path)) {
+                   log_path = this->debug_log_path;
+               } else {
+                   const std::string base = DebugBasePath();
+                   if (!base.empty()) {
+                       log_path = JoinPath(base, this->debug_log_path);
+                   } else {
+                       log_path = this->debug_log_path;
+                   }
+               }
+           } else {
+               log_path = DefaultDebugLogPath();
+           }
+           if (!log_path.empty()) {
+               debug_log.open(log_path);
+               if (debug_log.is_open()) {
+                   debug_log_active = true;
+                   debug_log << "iter,pose_idx,pos_x,pos_y,pos_z,"
+                             << "yaw_deg,pitch_deg,roll_deg,"
+                             << "fov_jac_x,fov_jac_y,fov_jac_z,"
+                             << "traj_jac_x,traj_jac_y,traj_jac_z,"
+                             << "jac_norm,base_step,target_delta_norm,step,"
+                             << "clipped_min,clipped_max,adaptive_step_scale,"
+                             << "min_step_iter,max_step_iter,norm_scale,alpha_deg"
+                             << std::endl;
+               }
+           }
+       }
+
+       const float points_count =
+           std::max(1.0f, static_cast<float>(this->valid_points.size()));
+       float prev_avg_jac_norm = 1.0f;
+       float adaptive_step_scale = 1.0f;
        for (int i =0;i<this->max_iteration;i++){
            std::vector<Eigen::Vector3f> trajecotry_jacobian=
                this->velocity_finite_differencing_jacobian(this->trajectory, this->trajectory_jacobian_step);
         //    std::cout<<"trajectory size " <<this->trajectory.size()<<std::endl;
         //    std::cout<<"trajectory jacobain size " <<trajecotry_jacobian.size()<<std::endl;
 
+           int clipped_min_count = 0;
+           int clipped_max_count = 0;
+           int active_update_count = 0;
+           float jac_norm_sum = 0.0f;
+           int jac_norm_count = 0;
+           const float iter_ratio =
+               static_cast<float>(i) / std::max(1, this->max_iteration - 1);
+           const float min_step_iter =
+               std::max(0.0f,
+                        this->min_step_rad *
+                            (1.0f - this->min_step_decay_strength * iter_ratio));
+           const float max_step_iter =
+               std::max(min_step_iter,
+                        this->max_step_rad *
+                            (1.0f - this->max_step_decay_strength * iter_ratio));
+           const float norm_scale =
+               (this->step_norm_mode == kStepNormJacobian)
+                   ? std::max(1e-6f, prev_avg_jac_norm)
+                   : points_count;
+
 
            //save quivers[0]
            if (write_to_file){
-               this->initial_trajectory_file<<std::endl;
+               if (this->initial_trajectory_file.is_open()) {
+                   this->initial_trajectory_file<<std::endl;
+               }
                R=this->trajectory[0].get_rotation();
                v_=this->c;
                v_=R*v_;
                this->write_arrow_to_file(this->trajectory[0].get_position(),v_);
+               if (this->quivers_metrics_file.is_open()) {
+                   this->quivers_metrics_file<<std::endl;
+                   float vis_count = 0.0f;
+                   float vis_score = 0.0f;
+                   this->calculate_FOV_jacobian_for_pose(this->trajectory[0], i, &vis_count, &vis_score);
+                   this->write_arrow_with_metrics(this->quivers_metrics_file,
+                                                  this->trajectory[0].get_position(), v_,
+                                                  vis_count, vis_score);
+               }
            }
 
 			//optimization
 			for (int j =0;j<trajecotry_jacobian.size();j++){
 				Eigen::Vector3f FOV_Jacobian,combined_Jacobian;
-				FOV_Jacobian=calculate_FOV_jacobian_for_pose(trajectory[j+1],i);
-				// combined_Jacobian=FOV_Jacobian+trajecotry_jacobian[j];
-				combined_Jacobian=FOV_Jacobian;
-				if (log_jacobian){
-					// std::cout<<"iter "<<i<<" pose "<<(j+1)<<" jacobian "<<combined_Jacobian.transpose()
-					        //  <<" norm "<<combined_Jacobian.norm()<<std::endl;
-				}
+				float vis_count = 0.0f;
+				float vis_score = 0.0f;
+				FOV_Jacobian=calculate_FOV_jacobian_for_pose(trajectory[j+1],i,
+                                                        &vis_count, &vis_score);
+				combined_Jacobian=FOV_Jacobian+trajecotry_jacobian[j];
+				// combined_Jacobian=FOV_Jacobian;
 				R = trajectory[j+1].get_rotation();
 				const float jacobian_norm = combined_Jacobian.norm();
+				float base_step = 0.0f;
+				float target_delta_norm = 0.0f;
+				float step = 0.0f;
+				bool clipped_min = false;
+				bool clipped_max = false;
 				if (jacobian_norm > 1e-9f) {
-                   const float base_step =
-                       this->base_step_scale / std::max(1.0f, static_cast<float>(this->points_list.size()));
-                   const float min_step = this->min_step_rad;
-                   const float max_step = this->max_step_rad;
-					float step = base_step;
-					float delta_norm = step * jacobian_norm;
-					if (delta_norm < min_step) {
-						step = min_step / jacobian_norm;
+                        jac_norm_sum += jacobian_norm;
+                        jac_norm_count++;
+                    active_update_count++;
+                    base_step =
+                        (adaptive_step_scale * this->base_step_scale) / norm_scale;
+					target_delta_norm = base_step * jacobian_norm;
+					if (target_delta_norm < min_step_iter) {
+						target_delta_norm = min_step_iter;
+                        clipped_min_count++;
+                        clipped_min = true;
 					}
-					if (delta_norm > max_step) {
-						step = max_step / jacobian_norm;
+					if (target_delta_norm > max_step_iter) {
+						target_delta_norm = max_step_iter;
+                        clipped_max_count++;
+                        clipped_max = true;
 					}
+                    step = target_delta_norm / jacobian_norm;
 					const Eigen::Vector3f delta = step * combined_Jacobian;
 					R = this->exp_map(delta) * R;
 				}
 				// R=this->exp_map(FOV_Jacobian)*(trajectory[j+1].get_rotation()); //overwrite, FOV only
-               this->trajectory[j+1].set_rotation(R); //update rotation
+                this->trajectory[j+1].set_rotation(R); //update rotation
 
 
                //save optimization step quivers
                Eigen::Vector3f v; v=this->c; v=R*v;
                if (write_to_file){
                    this->write_arrow_to_file(this->trajectory[j+1].get_position(),v); 
+                   if (this->quivers_metrics_file.is_open()) {
+                       this->write_arrow_with_metrics(this->quivers_metrics_file,
+                                                      this->trajectory[j+1].get_position(), v,
+                                                      vis_count, vis_score);
+                   }
                }  
+
+               if (debug_log_active) {
+                   const Eigen::Vector3f pos = this->trajectory[j+1].get_position();
+                   double yaw = 0.0, pitch = 0.0, roll = 0.0;
+                   const Eigen::Quaterniond q(R.cast<double>());
+                   quaternionToEulerUnrealEngine(q, yaw, pitch, roll);
+                   const float alpha_deg = GetVisibilityAlpha(i) * 180.0f / static_cast<float>(M_PI);
+                   debug_log << i << "," << (j + 1) << ","
+                             << pos.x() << "," << pos.y() << "," << pos.z() << ","
+                             << yaw << "," << pitch << "," << roll << ","
+                             << FOV_Jacobian.x() << "," << FOV_Jacobian.y() << "," << FOV_Jacobian.z() << ","
+                             << trajecotry_jacobian[j].x() << "," << trajecotry_jacobian[j].y() << "," << trajecotry_jacobian[j].z() << ","
+                             << jacobian_norm << "," << base_step << "," << target_delta_norm << "," << step << ","
+                             << (clipped_min ? 1 : 0) << "," << (clipped_max ? 1 : 0) << "," << adaptive_step_scale << ","
+                             << min_step_iter << "," << max_step_iter << "," << norm_scale << "," << alpha_deg
+                             << std::endl;
+               }
+           }
+
+           if (this->step_norm_mode == kStepNormJacobian && jac_norm_count > 0) {
+               prev_avg_jac_norm = jac_norm_sum / jac_norm_count;
+           }
+
+           if (this->adaptive_step_enabled && active_update_count > 0) {
+               const float min_clip_ratio =
+                   static_cast<float>(clipped_min_count) / active_update_count;
+               const float max_clip_ratio =
+                   static_cast<float>(clipped_max_count) / active_update_count;
+               if (max_clip_ratio > this->adapt_max_clip_thresh) {
+                   adaptive_step_scale = std::max(
+                       this->adapt_scale_min,
+                       adaptive_step_scale * this->adapt_shrink_factor);
+               } else if (min_clip_ratio > this->adapt_min_clip_thresh) {
+                   adaptive_step_scale =
+                       std::min(this->adapt_scale_max,
+                                adaptive_step_scale *
+                                    this->adapt_grow_high_min_factor);
+               } else if (max_clip_ratio < this->adapt_low_max_clip_thresh &&
+                          min_clip_ratio < this->adapt_low_min_clip_thresh) {
+                   adaptive_step_scale =
+                       std::min(this->adapt_scale_max,
+                                adaptive_step_scale *
+                                    this->adapt_grow_low_clip_factor);
+               }
            }
 
            //save quivers[last?]
@@ -711,6 +993,15 @@ public:
                v__=this->c;
                v__=R*v__;
                this->write_arrow_to_file(this->trajectory.back().get_position(),v__);
+               if (this->quivers_metrics_file.is_open()) {
+                   float vis_count = 0.0f;
+                   float vis_score = 0.0f;
+                   this->calculate_FOV_jacobian_for_pose(this->trajectory.back(), i,
+                                                        &vis_count, &vis_score);
+                   this->write_arrow_with_metrics(this->quivers_metrics_file,
+                                                  this->trajectory.back().get_position(), v__,
+                                                  vis_count, vis_score);
+               }
            }
        }
 
@@ -757,11 +1048,33 @@ private:
        return this->visibility_alpha;
    }
 
+   double GetKsForIteration(int iteration_count) const {
+       if (!this->ks_from_visibility || this->ks_transition_deg <= 0.0f) {
+           return this->ks;
+       }
+       const float alpha = GetVisibilityAlpha(iteration_count);
+       const double sin_alpha = std::sin(static_cast<double>(alpha));
+       if (std::abs(sin_alpha) < 1e-6) {
+           return this->ks;
+       }
+       const double delta_rad = static_cast<double>(this->ks_transition_deg) * M_PI / 180.0;
+       if (delta_rad <= 0.0) {
+           return this->ks;
+       }
+       const double dyn = 2.94 / (delta_rad * sin_alpha);
+       if (!std::isfinite(dyn) || dyn <= 0.0) {
+           return this->ks;
+       }
+       return dyn;
+   }
+
    Eigen::Vector3f v;
    std::vector<PoseSE3> trajectory;
    std::vector<double> imported_times_;
-   std::string output_initial_trajectory_filename;
+   std::string quivers_filename ;
    std::ofstream initial_trajectory_file;
+   std::string quivers_metrics_filename;
+   std::ofstream quivers_metrics_file;
    std::ofstream output_trajectory_file;
    std::string output_initial_trajectory_filename_ue;
    std::string output_initial_trajectory_filename_twc;
@@ -774,6 +1087,8 @@ private:
    std::vector<Eigen::Vector3f> points_dir_list;
    std::vector<float> points_uncertainty_list;
    double ks=15;
+   bool ks_from_visibility=false;
+   float ks_transition_deg=0.0f;
    float visibility_angle=15.0;
    double visibility_alpha=visibility_angle*M_PI/180.0;
    double visibility_alpha_180=179.0*M_PI/180.0;
@@ -792,14 +1107,80 @@ private:
    float max_uncertainty=0;
    bool DEBUG=false;
    bool log_jacobian=true;
+   bool debug_log_enabled=false;
+   std::string debug_log_path;
+   int step_norm_mode=kStepNormPoints;
+   bool adaptive_step_enabled=true;
    float base_step_scale=1.0f;
    float min_step_rad=0.25f * M_PI / 180.0f;
    float max_step_rad=5.0f * M_PI / 180.0f;
+   float min_step_decay_strength=1.0f;
+   float max_step_decay_strength=0.5f;
    float trajectory_jacobian_step=0.5f;
+   float adapt_max_clip_thresh=0.35f;
+   float adapt_min_clip_thresh=0.80f;
+   float adapt_low_max_clip_thresh=0.05f;
+   float adapt_low_min_clip_thresh=0.20f;
+   float adapt_shrink_factor=0.70f;
+   float adapt_grow_high_min_factor=1.15f;
+   float adapt_grow_low_clip_factor=1.05f;
+   float adapt_scale_min=0.10f;
+   float adapt_scale_max=10.0f;
    std::vector<float> fov_schedule_rad;
 
 
    float closest;
    float furthest;
+
+   static std::string DirName(const std::string& path) {
+       const std::string::size_type pos = path.find_last_of("/\\");
+       if (pos == std::string::npos) {
+           return std::string();
+       }
+       return path.substr(0, pos);
+   }
+
+   static bool HasPathSeparator(const std::string& path) {
+       return path.find('/') != std::string::npos || path.find('\\') != std::string::npos;
+   }
+
+   static std::string JoinPath(const std::string& left, const std::string& right) {
+       if (left.empty()) {
+           return right;
+       }
+       if (left.back() == '/' || left.back() == '\\') {
+           return left + right;
+       }
+       return left + "/" + right;
+   }
+
+   static std::string AppendSuffixBeforeExtension(const std::string& path,
+                                                  const std::string& suffix) {
+       const std::string::size_type sep = path.find_last_of("/\\");
+       const std::string::size_type dot = path.find_last_of('.');
+       if (dot != std::string::npos && (sep == std::string::npos || dot > sep)) {
+           return path.substr(0, dot) + suffix + path.substr(dot);
+       }
+       return path + suffix;
+   }
+
+   std::string DebugBasePath() const {
+       std::string base = output_trajectory_filename_twc;
+       if (base.empty()) {
+           base = output_trajectory_filename_ue;
+       }
+       if (base.empty()) {
+           return std::string();
+       }
+       return DirName(base);
+   }
+
+   std::string DefaultDebugLogPath() const {
+       const std::string dir = DebugBasePath();
+       if (dir.empty()) {
+           return std::string("optimization_debug.csv");
+       }
+       return JoinPath(dir, "optimization_debug.csv");
+   }
 };
 #endif
