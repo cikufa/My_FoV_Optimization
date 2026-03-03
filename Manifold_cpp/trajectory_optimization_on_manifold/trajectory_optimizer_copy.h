@@ -34,6 +34,23 @@ public:
        kStepNormPoints = 0,
        kStepNormJacobian = 1,
    };
+   enum FovNormMode {
+       kFovNormNone = 0,
+       kFovNormPoints = 1,
+       kFovNormVisible = 2,
+   };
+   // The FOV Jacobian here is formed with K_cam and c_cam (body/camera frame).
+   // To update R correctly you must either:
+   //  - convert the body-frame delta to world-frame and left-multiply, or
+   //  - right-multiply with the body-frame delta.
+   // The legacy behavior (left-multiply with body-frame delta) is frame-mismatched
+   // and can move the camera away from visibility maxima. We keep it only for
+   // regression comparisons.
+   enum UpdateFrameMode {
+       kUpdateLegacy = 0,  // body-frame Jacobian with left-multiply (legacy/mismatched).
+       kUpdateWorld = 1,   // world-frame Jacobian with left-multiply (fixed, default).
+       kUpdateBody = 2,    // body-frame Jacobian with right-multiply (fixed).
+   };
 
    myTrajectoryOptimizerOnManifold(std::string quivers_filename,
        std::string output_initial_trajectory_filename_ue,
@@ -107,7 +124,7 @@ public:
    }
 
    void set_trajectory_jacobian_step(float value) {
-       if (value > 0.0f) {
+       if (value >= 0.0f) {
            this->trajectory_jacobian_step = value;
        }
    }
@@ -134,8 +151,34 @@ public:
        }
    }
 
+   void set_fov_norm_mode(const std::string& mode) {
+       std::string lower = mode;
+       std::transform(lower.begin(), lower.end(), lower.begin(),
+                      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+       if (lower == "points" || lower == "point") {
+           this->fov_norm_mode = kFovNormPoints;
+       } else if (lower == "visible" || lower == "vis") {
+           this->fov_norm_mode = kFovNormVisible;
+       } else if (lower == "none" || lower == "off") {
+           this->fov_norm_mode = kFovNormNone;
+       }
+   }
+
    void set_adaptive_step_enabled(bool enabled) {
        this->adaptive_step_enabled = enabled;
+   }
+
+   void set_update_frame_mode(const std::string& mode) {
+       std::string lower = mode;
+       std::transform(lower.begin(), lower.end(), lower.begin(),
+                      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+       if (lower == "legacy" || lower == "old") {
+           this->update_frame_mode = kUpdateLegacy;
+       } else if (lower == "body" || lower == "right") {
+           this->update_frame_mode = kUpdateBody;
+       } else if (lower == "world" || lower == "left") {
+           this->update_frame_mode = kUpdateWorld;
+       }
    }
 
    void set_min_step_decay(float value) {
@@ -237,6 +280,8 @@ public:
        this->quivers_metrics_filename =
            AppendSuffixBeforeExtension(this->quivers_filename, "_metrics");
        this->quivers_metrics_file.open(this->quivers_metrics_filename);
+       // Write per-iteration quivers (positions + view dirs) for progress plots.
+       this->initial_trajectory_file.open(this->quivers_filename);
 
 	   this->output_trajectory_file.open(output_trajectory_filename);
        this->output_trajectory_filename_ue= output_trajectory_filename_ue;
@@ -245,7 +290,10 @@ public:
 
        this->v<<1,1,1;
        this->v=this->v/this->v.norm();
-       this->c<<1,0,0;
+       // Optical axis convention: for Twc in this dataset the camera forward
+       // axis aligns with +Z. Using +X here rotates visibility about the wrong
+       // axis and degrades optimization.
+       this->c<<0,0,1;
        this->c=this->c/this->c.norm();
        this->pcdfile.open(output_pointcloud_filename);
        this->trajectory= this->import_trajectory(input_trajectory_file_name," ", true);
@@ -564,13 +612,7 @@ public:
 
 
    }
-   // Eigen::Matrix3f Matrix_from_RPY_degree(float x,float y,float z){//XYZ order, //degree
-   //     Eigen::Matrix3f R;
-   //     R= Eigen::AngleAxisf(x*M_PI/180.0, Eigen::Vector3f::UnitX())
-   //      * Eigen::AngleAxisf(y*M_PI/180.0, Eigen::Vector3f::UnitY())
-   //      * Eigen::AngleAxisf(z*M_PI/180.0, Eigen::Vector3f::UnitZ());
-   //      return R;
-   // }
+   
    Eigen::Matrix3f skew(Eigen::Vector3f x){
        Eigen::Matrix3f skew;
        skew << 0, -x[2], x[1],
@@ -626,7 +668,7 @@ public:
            // print_eigen_v(point_pos);
           
            this->points_list_unnormalized.push_back(point_pos);
-           point_pos=point_pos/point_pos.norm();  //candidate to remove
+           point_pos=point_pos/point_pos.norm(); 
            this->points_list.push_back(point_pos);
 
            if(this->use_direction||this->use_uncertainty){
@@ -638,13 +680,11 @@ public:
                this->points_dir_list.push_back(point_dir);
                this->points_uncertainty_list.push_back(point_uncertainty);
            }
-
-
        }
    }
 
 // rotational velocity constraint
-   std::vector<Eigen::Vector3f> velocity_finite_differencing_jacobian(std::vector<PoseSE3> starting_trajectory,float step_size){
+   std::vector<Eigen::Vector3f> velocity_finite_differencing_jacobian(std::vector<PoseSE3> starting_trajectory){
        std::vector<Eigen::Vector3f> trajecotry_jacobian;
        //suppose rotation velocity difference is   R2R1^T,  R1 is the earlier rotation, R2 is the later rotation
        for (int i =1;i<starting_trajectory.size()-1;i++){ //restric to elements that are not the head or the tail of the vector
@@ -658,7 +698,7 @@ public:
            Eigen::Vector3f early_J=get_Jacobian_of_transposed_exp_from_K_and_C(K_1[0],K_1[1],K_1[2],C_1[0],C_1[1],C_1[2]);
            //store into vector
 
-           trajecotry_jacobian.push_back(step_size*(later_J+early_J));
+           trajecotry_jacobian.push_back(later_J+early_J);
        }
        return trajecotry_jacobian;
    }
@@ -796,8 +836,53 @@ public:
         if (visibility_score) {
             *visibility_score = vis_score_local;
         }
+        if (this->fov_norm_mode == kFovNormPoints) {
+            const float denom = std::max(1.0f, static_cast<float>(this->valid_points.size()));
+            aJ_l = 5* aJ_l / (denom *M_PI);  //changed 
+        } else if (this->fov_norm_mode == kFovNormVisible) {
+            const float denom = std::max(1.0f, vis_count_local);
+            aJ_l = aJ_l / denom;
+        }
         return aJ_l;
     }
+
+   void calculate_visibility_metrics_for_pose(PoseSE3 pos, int iteration_count,
+                                              float visibility_alpha_rad,
+                                              float* visible_count,
+                                              float* visibility_score) {
+       if (!visible_count && !visibility_score) {
+           return;
+       }
+       this->populate_local_indexes(pos.get_position());
+       Eigen::Matrix3f R = pos.get_rotation();
+       const double ks_iter = GetKsForIteration(iteration_count);
+       const float cos_alpha = std::cos(visibility_alpha_rad);
+       float vis_count_local = 0.0f;
+       float vis_score_local = 0.0f;
+       for (Eigen::Vector3f K_ : this->points_list) {
+           const float u = (K_.transpose()) * R * this->c;
+           if (visible_count && u >= cos_alpha) {
+               vis_count_local += 1.0f;
+           }
+           if (visibility_score) {
+               float score = 0.0f;
+               if (this->optimize_visibility_sigmoid) {
+                   const float w =
+                       (-1.0f) * static_cast<float>(ks_iter) * (u - cos_alpha);
+                   score = 1.0f / (1.0f + std::exp(w));
+               } else {
+                   score = (u >= cos_alpha) ? 1.0f : 0.0f;
+               }
+               vis_score_local += score;
+           }
+       }
+       if (visible_count) {
+           *visible_count = vis_count_local;
+       }
+       if (visibility_score) {
+           *visibility_score = vis_score_local;
+       }
+   }
 
    void optimize(bool write_to_file){
        Eigen::Matrix3f R;
@@ -828,13 +913,16 @@ public:
                if (debug_log.is_open()) {
                    debug_log_active = true;
                    debug_log << "iter,pose_idx,pos_x,pos_y,pos_z,"
-                             << "yaw_deg,pitch_deg,roll_deg,"
-                             << "fov_jac_x,fov_jac_y,fov_jac_z,"
-                             << "traj_jac_x,traj_jac_y,traj_jac_z,"
-                             << "jac_norm,base_step,target_delta_norm,step,"
-                             << "clipped_min,clipped_max,adaptive_step_scale,"
-                             << "min_step_iter,max_step_iter,norm_scale,alpha_deg"
-                             << std::endl;
+                              << "yaw_deg,pitch_deg,roll_deg,"
+                              << "fov_jac_x,fov_jac_y,fov_jac_z,"
+                              << "traj_jac_x,traj_jac_y,traj_jac_z,"
+                              << "jac_norm,base_step,target_delta_norm,step,"
+                              << "clipped_min,clipped_max,adaptive_step_scale,"
+                              << "min_step_iter,max_step_iter,norm_scale,alpha_deg,"
+                              << "vis_count_sched,vis_score_sched,"
+                              << "vis_count_post,vis_score_post,"
+                              << "vis_count_fixed,vis_score_fixed"
+                              << std::endl;
                }
            }
        }
@@ -845,7 +933,7 @@ public:
        float adaptive_step_scale = 1.0f;
        for (int i =0;i<this->max_iteration;i++){
            std::vector<Eigen::Vector3f> trajecotry_jacobian=
-               this->velocity_finite_differencing_jacobian(this->trajectory, this->trajectory_jacobian_step);
+                this->velocity_finite_differencing_jacobian(this->trajectory); //this->trajectory_jacobian_step: scale factor for the smoothness (velocity) Jacobian
         //    std::cout<<"trajectory size " <<this->trajectory.size()<<std::endl;
         //    std::cout<<"trajectory jacobain size " <<trajecotry_jacobian.size()<<std::endl;
 
@@ -864,31 +952,11 @@ public:
                std::max(min_step_iter,
                         this->max_step_rad *
                             (1.0f - this->max_step_decay_strength * iter_ratio));
-           const float norm_scale =
+           const float norm_scale_iter =
                (this->step_norm_mode == kStepNormJacobian)
                    ? std::max(1e-6f, prev_avg_jac_norm)
-                   : points_count;
+                   : 1.0f;
 
-
-           //save quivers[0]
-           if (write_to_file){
-               if (this->initial_trajectory_file.is_open()) {
-                   this->initial_trajectory_file<<std::endl;
-               }
-               R=this->trajectory[0].get_rotation();
-               v_=this->c;
-               v_=R*v_;
-               this->write_arrow_to_file(this->trajectory[0].get_position(),v_);
-               if (this->quivers_metrics_file.is_open()) {
-                   this->quivers_metrics_file<<std::endl;
-                   float vis_count = 0.0f;
-                   float vis_score = 0.0f;
-                   this->calculate_FOV_jacobian_for_pose(this->trajectory[0], i, &vis_count, &vis_score);
-                   this->write_arrow_with_metrics(this->quivers_metrics_file,
-                                                  this->trajectory[0].get_position(), v_,
-                                                  vis_count, vis_score);
-               }
-           }
 
 			//optimization
 			for (int j =0;j<trajecotry_jacobian.size();j++){
@@ -897,9 +965,13 @@ public:
 				float vis_score = 0.0f;
 				FOV_Jacobian=calculate_FOV_jacobian_for_pose(trajectory[j+1],i,
                                                         &vis_count, &vis_score);
-				combined_Jacobian=FOV_Jacobian+trajecotry_jacobian[j];
-				// combined_Jacobian=FOV_Jacobian;
+                float norm_scale = norm_scale_iter;
+                float smooth_scale = 0.5f;
+                const Eigen::Vector3f traj_scaled =
+                    this->trajectory_jacobian_step * smooth_scale * trajecotry_jacobian[j];
+				combined_Jacobian = FOV_Jacobian + traj_scaled;
 				R = trajectory[j+1].get_rotation();
+
 				const float jacobian_norm = combined_Jacobian.norm();
 				float base_step = 0.0f;
 				float target_delta_norm = 0.0f;
@@ -907,8 +979,8 @@ public:
 				bool clipped_min = false;
 				bool clipped_max = false;
 				if (jacobian_norm > 1e-9f) {
-                        jac_norm_sum += jacobian_norm;
-                        jac_norm_count++;
+                    jac_norm_sum += jacobian_norm;
+                    jac_norm_count++;
                     active_update_count++;
                     base_step =
                         (adaptive_step_scale * this->base_step_scale) / norm_scale;
@@ -924,39 +996,82 @@ public:
                         clipped_max = true;
 					}
                     step = target_delta_norm / jacobian_norm;
-					const Eigen::Vector3f delta = step * combined_Jacobian;
-					R = this->exp_map(delta) * R;
+					const Eigen::Vector3f delta_body = step * combined_Jacobian;
+					if (this->update_frame_mode == kUpdateLegacy) {
+						// Legacy/mismatched: left-multiply with body-frame delta.
+						R = this->exp_map(delta_body) * R;
+					} else if (this->update_frame_mode == kUpdateBody) {
+						// Body-frame update: right-multiply.
+						R = R * this->exp_map(delta_body);
+					} else {
+						// World-frame update: convert body delta to world and left-multiply.
+						const Eigen::Vector3f delta_world = R * delta_body;
+						R = this->exp_map(delta_world) * R;
+					}
+                    this->trajectory[j+1].set_rotation(R); //update rotation
 				}
-				// R=this->exp_map(FOV_Jacobian)*(trajectory[j+1].get_rotation()); //overwrite, FOV only
-                this->trajectory[j+1].set_rotation(R); //update rotation
 
 
-               //save optimization step quivers
-               Eigen::Vector3f v; v=this->c; v=R*v;
-               if (write_to_file){
-                   this->write_arrow_to_file(this->trajectory[j+1].get_position(),v); 
-                   if (this->quivers_metrics_file.is_open()) {
-                       this->write_arrow_with_metrics(this->quivers_metrics_file,
-                                                      this->trajectory[j+1].get_position(), v,
-                                                      vis_count, vis_score);
-                   }
-               }  
+				if (debug_log_active) {
+                    float vis_count_post = 0.0f;
+                    float vis_score_post = 0.0f;
+                    float vis_count_fixed = 0.0f;
+                    float vis_score_fixed = 0.0f;
+                    const float alpha_rad = GetVisibilityAlpha(i);
+                    this->calculate_visibility_metrics_for_pose(
+                        this->trajectory[j+1], i, alpha_rad,
+                        &vis_count_post, &vis_score_post);
+                    constexpr float kFixedAlphaRad = 30.0f * static_cast<float>(M_PI) / 180.0f;
+                    this->calculate_visibility_metrics_for_pose(
+                        this->trajectory[j+1], i, kFixedAlphaRad,
+                        &vis_count_fixed, &vis_score_fixed);
 
-               if (debug_log_active) {
                    const Eigen::Vector3f pos = this->trajectory[j+1].get_position();
                    double yaw = 0.0, pitch = 0.0, roll = 0.0;
                    const Eigen::Quaterniond q(R.cast<double>());
                    quaternionToEulerUnrealEngine(q, yaw, pitch, roll);
-                   const float alpha_deg = GetVisibilityAlpha(i) * 180.0f / static_cast<float>(M_PI);
+                   const float alpha_deg = alpha_rad * 180.0f / static_cast<float>(M_PI);
                    debug_log << i << "," << (j + 1) << ","
                              << pos.x() << "," << pos.y() << "," << pos.z() << ","
                              << yaw << "," << pitch << "," << roll << ","
                              << FOV_Jacobian.x() << "," << FOV_Jacobian.y() << "," << FOV_Jacobian.z() << ","
-                             << trajecotry_jacobian[j].x() << "," << trajecotry_jacobian[j].y() << "," << trajecotry_jacobian[j].z() << ","
+                             << traj_scaled.x() << ","
+                             << traj_scaled.y() << ","
+                             << traj_scaled.z() << ","
                              << jacobian_norm << "," << base_step << "," << target_delta_norm << "," << step << ","
                              << (clipped_min ? 1 : 0) << "," << (clipped_max ? 1 : 0) << "," << adaptive_step_scale << ","
-                             << min_step_iter << "," << max_step_iter << "," << norm_scale << "," << alpha_deg
-                             << std::endl;
+                              << min_step_iter << "," << max_step_iter << "," << norm_scale << ","
+                              << alpha_deg << ","
+                              << vis_count << "," << vis_score << ","
+                              << vis_count_post << "," << vis_score_post << ","
+                              << vis_count_fixed << "," << vis_score_fixed
+                              << std::endl;
+                }
+           }
+
+           if (write_to_file){
+               if (this->initial_trajectory_file.is_open()) {
+                   this->initial_trajectory_file<<std::endl;
+               }
+               if (this->quivers_metrics_file.is_open()) {
+                   this->quivers_metrics_file<<std::endl;
+               }
+               for (size_t k = 0; k < this->trajectory.size(); ++k) {
+                   R = this->trajectory[k].get_rotation();
+                   v_ = this->c;
+                   v_ = R * v_;
+                   this->write_arrow_to_file(this->trajectory[k].get_position(), v_);
+                   if (this->quivers_metrics_file.is_open()) {
+                       float vis_count = 0.0f;
+                       float vis_score = 0.0f;
+                       const float debug_alpha_rad = 30.0f * M_PI / 180.0f;
+                       this->calculate_visibility_metrics_for_pose(
+                           this->trajectory[k], i, debug_alpha_rad,
+                           &vis_count, &vis_score);
+                       this->write_arrow_with_metrics(this->quivers_metrics_file,
+                                                      this->trajectory[k].get_position(), v_,
+                                                      vis_count, vis_score);
+                   }
                }
            }
 
@@ -987,22 +1102,6 @@ public:
                }
            }
 
-           //save quivers[last?]
-           if (write_to_file){
-               R=this->trajectory.back().get_rotation();
-               v__=this->c;
-               v__=R*v__;
-               this->write_arrow_to_file(this->trajectory.back().get_position(),v__);
-               if (this->quivers_metrics_file.is_open()) {
-                   float vis_count = 0.0f;
-                   float vis_score = 0.0f;
-                   this->calculate_FOV_jacobian_for_pose(this->trajectory.back(), i,
-                                                        &vis_count, &vis_score);
-                   this->write_arrow_with_metrics(this->quivers_metrics_file,
-                                                  this->trajectory.back().get_position(), v__,
-                                                  vis_count, vis_score);
-               }
-           }
        }
 
 
@@ -1036,15 +1135,18 @@ private:
        }
        const float ratio = static_cast<float>(iteration_count) /
                            std::max(1, this->max_iteration);
-       if (ratio < 0.05f) {
-           return this->visibility_alpha_180;
-       }
+    //    if (ratio < 0.1f) {
+    //        return this->visibility_alpha_180;
+    //    }
        if (ratio < 0.1f) {
            return this->visibility_alpha_90;
        }
        if (ratio < 0.15f) {
            return this->visibility_alpha_60;
        }
+        if (ratio < 0.2f) {
+              return this->visibility_alpha_30;
+        }
        return this->visibility_alpha;
    }
 
@@ -1091,9 +1193,10 @@ private:
    float ks_transition_deg=0.0f;
    float visibility_angle=15.0;
    double visibility_alpha=visibility_angle*M_PI/180.0;
-   double visibility_alpha_180=179.0*M_PI/180.0;
+//    double visibility_alpha_180=179.0*M_PI/180.0;
    double visibility_alpha_90=90.0*M_PI/180.0;
    double visibility_alpha_60=60.0*M_PI/180.0;
+   double visibility_alpha_30=30.0*M_PI/180.0;
    bool optimize_visibility_sigmoid=true;
    Eigen::Vector3f c; //camera principle axi s
    std::ofstream montecarlopointsfile;
@@ -1110,8 +1213,10 @@ private:
    bool debug_log_enabled=false;
    std::string debug_log_path;
    int step_norm_mode=kStepNormPoints;
+   int fov_norm_mode=kFovNormPoints;
+   int update_frame_mode=kUpdateWorld;
    bool adaptive_step_enabled=true;
-   float base_step_scale=1.0f;
+   float base_step_scale=0.2;
    float min_step_rad=0.25f * M_PI / 180.0f;
    float max_step_rad=5.0f * M_PI / 180.0f;
    float min_step_decay_strength=1.0f;
