@@ -69,6 +69,41 @@ https://pytorch.org/get-started/locally/
 ## Pipeline Overview
 The process is split into three stages, Mapping, Planning and Registration stage.
 
+## Monte Carlo Grid Experiment
+
+See `docs/monte_carlo_runner.md` for full details. Quick start:
+
+Generate a clustered map (and subsamples + manifest):
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/generate_cluster_map.py \
+  --features-per-cluster 500,800,1200,1500 \
+  --bounds "-250,250,-250,250,0,10" \
+  --seed 42 \
+  --subsample-levels 10 \
+  --subsample-prefix 0
+```
+
+Run Monte Carlo + plots on a specific subsample level (auto-detects manifest):
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map clusters4_map.csv \
+  --level 3
+```
+
+Interactive 3D viewer (pose + iteration sliders):
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map clusters4_map.csv \
+  --level 3 \
+  --show
+```
+
+Outputs (CSV + plots) are saved under:
+`Results/monte_carlo/<timestamp>_<label>/data`
+
 
 ### Mapping  (step1)
 During the Mapping stage, we first capture a rosbag with posed images (How to is in the 'Runs' section below), the trajectory should be for  "mapping" purpose. By running both lidar localizaiton, and D455 cameras mounted on top of robot.
