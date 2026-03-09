@@ -73,18 +73,20 @@ The process is split into three stages, Mapping, Planning and Registration stage
 
 See `docs/monte_carlo_runner.md` for full details. Quick start:
 
-Generate a clustered map (and subsamples + manifest):
+Generate a clustered map + sampled poses (and subsamples + manifest):
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/generate_cluster_map.py \
   --features-per-cluster 500,800,1200,1500 \
   --bounds "-250,250,-250,250,0,10" \
+  --pose-count 50 \
+  --pose-bounds "-250,250,-250,250,0,10" \
   --seed 42 \
   --subsample-levels 10 \
   --subsample-prefix 0
 ```
 
-Run Monte Carlo + plots on a specific subsample level (auto-detects manifest):
+Run Monte Carlo on a specific subsample level (auto-detects manifest + pose file):
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
@@ -92,17 +94,21 @@ python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experi
   --level 3
 ```
 
-Interactive 3D viewer (pose + iteration sliders):
+Plot results (averages + per-pose + 3D quivers):
 
 ```bash
-python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
-  --map clusters4_map.csv \
-  --level 3 \
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/plot_monte_carlo_results.py \
+  --run-dir /home/shekoufeh/fov_ws/My_FoV_Optimization/Results/monte_carlo/<timestamp> \
   --show
 ```
 
 Outputs (CSV + plots) are saved under:
 `Results/monte_carlo/<timestamp>_<label>/data`
+
+Pipeline notes:
+- The generator writes `Map/<map>_manifest.yaml`, which includes `pose_map` and subsample paths.
+- The runner uses `pose_map` (if present) and caches brute-force results in `Data/*bf_cache.csv`.
+- The plotter reads `run_info.txt` to locate the correct map and log slice for this run.
 
 
 ### Mapping  (step1)
