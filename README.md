@@ -78,9 +78,8 @@ Generate a clustered map + sampled poses (and subsamples + manifest):
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/generate_cluster_map.py \
   --features-per-cluster 500,800,1200,1500 \
-  --bounds "-250,250,-250,250,0,10" \
-  --pose-count 50 \
-  --pose-bounds "-250,250,-250,250,0,10" \
+  --bounds -250 250 -250 250 0 10 \
+  --pose-resolution 20,20,1 \
   --seed 42 \
   --subsample-levels 10 \
   --subsample-prefix 0
@@ -90,11 +89,11 @@ Run Monte Carlo on a specific subsample level (auto-detects manifest + pose file
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
-  --map clusters4_map.csv \
+  --map Map/clusters4_map.csv \
   --level 3
 ```
 
-Plot results (averages + per-pose + 3D quivers):
+Plot results (charts saved as PNGs, 3D viewer only on `--show`):
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/plot_monte_carlo_results.py \
@@ -107,7 +106,7 @@ Outputs (CSV + plots) are saved under:
 
 Pipeline notes:
 - The generator writes `Map/<map>_manifest.yaml`, which includes `pose_map` and subsample paths.
-- The runner uses `pose_map` (if present) and caches brute-force results in `Data/*bf_cache.csv`.
+- The runner auto-detects the pose file from the map name (or manifest) and caches brute-force results in `Data/*bf_cache.csv` (keyed by map+pose path).
 - The plotter reads `run_info.txt` to locate the correct map and log slice for this run.
 
 
