@@ -1,13 +1,10 @@
-// Checks if _ANIMALS IF DECLARED
-#ifndef _MANIFOLD_
+// Checks if _MANIFOLD_BACKUP_ IF DECLARED
+#ifndef _MANIFOLD_BACKUP_
   
-// Defines _ANIMALS_ if above
+// Defines _MANIFOLD_BACKUP_ if above
 // conditions fails
-#define _MANIFOLD_
+#define _MANIFOLD_BACKUP_
 
-#ifdef USE_MANIFOLD_BACKUP
-#include "manifold_backup.h"
-#else
 
 #include <iostream>
 #include <eigen3/Eigen/Core>
@@ -74,11 +71,6 @@ inline void write_header_if_empty(const std::string& path, std::ofstream& stream
 
 class FovOptimizerOnManifold{
 public:
-		enum UpdateFrameMode {
-			kUpdateLegacy = 0,
-			kUpdateWorld = 1,
-			kUpdateBody = 2,
-		};
 		// 	def skew(self,x): #skew-symmetric
 		// 	    return np.array([[0, -x[2], x[1]],
 		// 	                     [x[2], 0, -x[0]],
@@ -189,42 +181,6 @@ public:
 		this->loaderrot=new CloudLoader;
 		this->loaderrot->ImportFromXyzFile("../../all_rotation.csv",1,true,false,",");
 	}	
-
-		void set_update_frame_mode(UpdateFrameMode mode) {
-			this->update_frame_mode = mode;
-		}
-		void set_step_clamp_enabled(bool enabled) {
-			this->step_clamp_enabled = enabled;
-		}
-		void set_step_limits_deg(float min_deg, float max_deg) {
-			if (min_deg > 0.0f) {
-				this->min_step_rad = min_deg * static_cast<float>(M_PI) / 180.0f;
-			}
-			if (max_deg > 0.0f) {
-				this->max_step_rad = max_deg * static_cast<float>(M_PI) / 180.0f;
-			}
-		}
-		void set_use_fov_schedule(bool enabled) {
-			this->use_fov_schedule = enabled;
-		}
-		void set_use_ks_schedule(bool enabled) {
-			this->use_ks_schedule = enabled;
-		}
-		void set_ks_transition_deg(float value) {
-			if (value > 0.0f) {
-				this->ks_transition_deg = value;
-			}
-		}
-		void set_fov_schedule_deg(const std::vector<float>& schedule_deg) {
-			this->fov_schedule_rad.clear();
-			for (float value : schedule_deg) {
-				if (value > 0.0f) {
-					this->fov_schedule_rad.push_back(
-						value * static_cast<float>(M_PI) / 180.0f);
-				}
-			}
-			this->use_fov_schedule = true;
-		}
 
 	    Eigen::Matrix3f get_R(void){
 	   		return this->R;
@@ -424,13 +380,34 @@ public:
 						u = (K_.transpose()) * (this->R) * this->c;  
 						KTRC = u;
 						residual = residual + KTRC;
-						const float visibility_alpha = GetVisibilityAlpha(i);
-						const float cos_alpha = std::cos(visibility_alpha);
-						const float ks_iter = static_cast<float>(GetKsForIteration(i));
+						float visibility_alpha;
+						float iteration_count = (float)i;
+						
+						// if (iteration_count / this->max_iteration < 0.2) {
+						// 	visibility_alpha = this->visibility_alpha_180;
+						// } else if (iteration_count / this->max_iteration < 0.3) {
+						// 	visibility_alpha = this->visibility_alpha_90;
+						// } else if (iteration_count / this->max_iteration < 0.4) {
+						// 	visibility_alpha = this->visibility_alpha_45;
+						// } else if (iteration_count / this->max_iteration < 0.5) {
+						// 	visibility_alpha = this->visibility_alpha_22_5;
+						// } else {
+						// 	visibility_alpha = this->visibility_alpha;
+						// }
 
-						w = (-1.0f) * ks_iter * (u - cos_alpha); 
+						if (iteration_count / this->max_iteration < 0.2) {
+							visibility_alpha = this->visibility_alpha_180;
+						} else if (iteration_count / this->max_iteration < 0.3) {
+							visibility_alpha = this->visibility_alpha_120;
+						} else if (iteration_count / this->max_iteration < 0.4) {
+							visibility_alpha = this->visibility_alpha_90;
+						} else{
+							visibility_alpha = this->visibility_alpha;
+						}
+		
+						w = (-1.0) * this->ks * (u - cos(this->visibility_alpha)); 
 						v = exp(w);
-						coeff = (-1.0f) * (pow((1 + v), (-2)) * v * (0.0f - ks_iter)); 
+						coeff = (-1.0) * (pow((1 + v), (-2)) * v * (0.0 - this->ks)); 
 						F_Jacobian = coeff * J; 
 					}
 					Eigen::Vector3f aJ = F_Jacobian;
@@ -449,22 +426,6 @@ public:
 					visibility_history.erase(visibility_history.begin()); 
 				}
 
-				const float jacobian_norm = aJ_l.norm();
-				if (jacobian_norm > 1e-9f) {
-					step = initial_step;
-					if (this->step_clamp_enabled) {
-						float delta_norm = step * jacobian_norm;
-						if (delta_norm < this->min_step_rad) {
-							step = this->min_step_rad / jacobian_norm;
-						}
-						if (delta_norm > this->max_step_rad) {
-							step = this->max_step_rad / jacobian_norm;
-						}
-					}
-				} else {
-					step = 0.0f;
-				}
-
 				// std::cout<<aJ_l<<std::endl;
 				/*______________________________________________________________________________________-logging_________________*/
 				this->ajl << aJ_l << std::endl;
@@ -475,7 +436,7 @@ public:
 										 << std::to_string(this->ref_point[1]) << "," << std::to_string(this->ref_point[2]) << ","
 										 << std::to_string(this->rotated_vec[0]) << "," << std::to_string(this->rotated_vec[1]) << "," 
 										 << std::to_string(this->rotated_vec[2]) << "," << feature_count << "," << degree_between << ","
-										 << jacobian_norm << ","<< step <<"," << current_visibility<< std::endl;
+										 << aJ_l.norm() << ","<< step <<"," << current_visibility<< std::endl;
 
 
 					/*______________________________________________________________________________________-perturb if needed __________________*/
@@ -515,10 +476,9 @@ public:
 				// std::cout<<"j threshold"<<J_thresh<<std::endl;
 
 /*___________________________________________ ________________________________________-update R__________________*/
-				const Eigen::Vector3f delta_body = step * aJ_l;
-				if (delta_body.norm() > 1e-9f) {
-					ApplyRotationUpdate(delta_body);
-				}
+				step = initial_step; 
+				aJ_l = step * aJ_l;
+				this->R = this->exp_map(aJ_l) * this->R; 
 				this->rotated_vec = this->R * this->c;
 				// Eigen::Quaternionf quat = matrixToQuaternion(this->R);
 /*_____________________________________________________________________________________-logging_________________*/
@@ -596,32 +556,14 @@ public:
 				aJ_l << 0, 0, 0;
 				float current_visibility = 0.0f;
 
-				float visibility_alpha = static_cast<float>(this->visibility_alpha);
-				if (this->use_fov_schedule) {
-					if (!this->fov_schedule_rad.empty()) {
-						visibility_alpha = GetVisibilityAlpha(i);
-					} else {
-						const int stage_len = std::max(1, this->max_iteration / schedule_len);
-						int stage_idx = i / stage_len;
-						if (stage_idx >= schedule_len) {
-							stage_idx = schedule_len - 1;
-						}
-						visibility_alpha = schedule_rad[stage_idx];
-					}
+				const int stage_len = std::max(1, this->max_iteration / schedule_len);
+				int stage_idx = i / stage_len;
+				if (stage_idx >= schedule_len) {
+					stage_idx = schedule_len - 1;
 				}
+				const float visibility_alpha = schedule_rad[stage_idx];
 				const float cos_alpha = std::cos(visibility_alpha);
-				float ks_iter = static_cast<float>(this->ks);
-				if (this->use_ks_schedule && this->ks_transition_deg > 0.0f) {
-					const double sin_alpha = std::sin(static_cast<double>(visibility_alpha));
-					const double delta_rad =
-						static_cast<double>(this->ks_transition_deg) * M_PI / 180.0;
-					if (std::abs(sin_alpha) > 1e-6 && delta_rad > 0.0) {
-						const double dyn = 2.94 / (delta_rad * sin_alpha);
-						if (std::isfinite(dyn) && dyn > 0.0) {
-							ks_iter = static_cast<float>(dyn);
-						}
-					}
-				}
+				const float ks_iter = static_cast<float>(this->ks);
 
 				for (Eigen::Vector3f K_ : this->K_list) {
 					Eigen::Vector3f K = (K_.transpose()) * this->R;
@@ -716,21 +658,17 @@ public:
 				if (jacobian_norm > 1e-9f) {
 					base_step = (adaptive_step_scale * base_step_scale) / norm_scale;
 					target_delta_norm = base_step * jacobian_norm;
-					if (this->step_clamp_enabled) {
-						if (target_delta_norm < min_step_iter) {
-							target_delta_norm = min_step_iter;
-							clipped_min = true;
-						}
-						if (target_delta_norm > max_step_iter) {
-							target_delta_norm = max_step_iter;
-							clipped_max = true;
-						}
+					if (target_delta_norm < min_step_iter) {
+						target_delta_norm = min_step_iter;
+						clipped_min = true;
+					}
+					if (target_delta_norm > max_step_iter) {
+						target_delta_norm = max_step_iter;
+						clipped_max = true;
 					}
 					step = target_delta_norm / jacobian_norm;
-					const Eigen::Vector3f delta_body = step * aJ_l;
-					if (delta_body.norm() > 1e-9f) {
-						ApplyRotationUpdate(delta_body);
-					}
+					const Eigen::Vector3f delta = step * aJ_l;
+					this->R = this->exp_map(delta) * this->R;
 				} else {
 					step = 0.0f;
 				}
@@ -885,14 +823,6 @@ private:
 		double visibility_alpha_90=90.0*M_PI/180.0;
 		double visibility_alpha_45=45.0*M_PI/180.0;
 		double visibility_alpha_22_5=22.5*M_PI/180.0;
-		bool use_fov_schedule=false;
-		bool use_ks_schedule=false;
-		float ks_transition_deg=0.0f;
-		std::vector<float> fov_schedule_rad;
-		int update_frame_mode=kUpdateWorld;
-		bool step_clamp_enabled=true;
-		float min_step_rad=0.25f * static_cast<float>(M_PI) / 180.0f;
-		float max_step_rad=5.0f * static_cast<float>(M_PI) / 180.0f;
 		float optimized_max_vis;
 
 		int cnt;
@@ -916,66 +846,6 @@ private:
 		Eigen::Vector3f brute_force_best_vector_w_vis;
 		Eigen::Vector3f brute_force_best_vector_w_feature;
 
-		float GetVisibilityAlpha(int iteration_count) const {
-			if (!this->use_fov_schedule) {
-				return static_cast<float>(this->visibility_alpha);
-			}
-			if (!this->fov_schedule_rad.empty()) {
-				const int stages = static_cast<int>(this->fov_schedule_rad.size());
-				const int stage_len = std::max(1, this->max_iteration / stages);
-				int stage_idx = iteration_count / stage_len;
-				if (stage_idx >= stages) {
-					stage_idx = stages - 1;
-				}
-				return this->fov_schedule_rad[stage_idx];
-			}
-			const float ratio = static_cast<float>(iteration_count) /
-			                    std::max(1, this->max_iteration);
-			if (ratio < 0.2f) {
-				return static_cast<float>(this->visibility_alpha_180);
-			}
-			if (ratio < 0.3f) {
-				return static_cast<float>(this->visibility_alpha_120);
-			}
-			if (ratio < 0.4f) {
-				return static_cast<float>(this->visibility_alpha_90);
-			}
-			return static_cast<float>(this->visibility_alpha);
-		}
-
-		double GetKsForIteration(int iteration_count) const {
-			if (!this->use_ks_schedule || this->ks_transition_deg <= 0.0f) {
-				return this->ks;
-			}
-			const float alpha = GetVisibilityAlpha(iteration_count);
-			const double sin_alpha = std::sin(static_cast<double>(alpha));
-			if (std::abs(sin_alpha) < 1e-6) {
-				return this->ks;
-			}
-			const double delta_rad =
-				static_cast<double>(this->ks_transition_deg) * M_PI / 180.0;
-			if (delta_rad <= 0.0) {
-				return this->ks;
-			}
-			const double dyn = 2.94 / (delta_rad * sin_alpha);
-			if (!std::isfinite(dyn) || dyn <= 0.0) {
-				return this->ks;
-			}
-			return dyn;
-		}
-
-		void ApplyRotationUpdate(const Eigen::Vector3f& delta_body) {
-			if (this->update_frame_mode == kUpdateBody) {
-				this->R = this->R * this->exp_map(delta_body);
-			} else if (this->update_frame_mode == kUpdateWorld) {
-				const Eigen::Vector3f delta_world = this->R * delta_body;
-				this->R = this->exp_map(delta_world) * this->R;
-			} else {
-				this->R = this->exp_map(delta_body) * this->R;
-			}
-		}
-
 };
 
-#endif // USE_MANIFOLD_BACKUP
-#endif // _MANIFOLD_
+#endif // _MANIFOLD_BACKUP_
