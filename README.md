@@ -71,7 +71,7 @@ The process is split into three stages, Mapping, Planning and Registration stage
 
 ## Monte Carlo Grid Experiment
 
-See `docs/monte_carlo_runner.md` for full details. Quick start:
+### Quick Start
 
 Generate a clustered map + sampled poses (and subsamples + manifest):
 
@@ -90,7 +90,18 @@ Run Monte Carlo on a specific subsample level (auto-detects manifest + pose file
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
   --map Map/clusters4_map.csv \
-  --level 3
+  --level 3 \
+  --build
+```
+
+Use the backup manifold implementation:
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map Map/clusters4_map.csv \
+  --level 3 \
+  --manifold backup \
+  --build
 ```
 
 Plot results (charts saved as PNGs, 3D viewer only on `--show`):
@@ -102,12 +113,117 @@ python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/plot_monte_carlo_resul
 ```
 
 Outputs (CSV + plots) are saved under:
-`Results/monte_carlo/<timestamp>_<label>/data`
+`Results/monte_carlo/<timestamp>_<label>/data` (raw CSVs)
+`Results/monte_carlo/<timestamp>_<label>/` (plots + analysis)
 
 Pipeline notes:
 - The generator writes `Map/<map>_manifest.yaml`, which includes `pose_map` and subsample paths.
-- The runner auto-detects the pose file from the map name (or manifest) and caches brute-force results in `Data/*bf_cache.csv` (keyed by map+pose path).
+- The runner auto-detects the pose file from the map name (or manifest) and caches brute-force results in `Results/monte_carlo/<timestamp>_<label>/bf_cache/` (keyed by map+pose path).
 - The plotter reads `run_info.txt` to locate the correct map and log slice for this run.
+
+Performance + cache controls (env vars):
+- `FOV_USE_OPENMP=1` enables OpenMP over poses. Optional: `FOV_NUM_THREADS=8`.
+- `FOV_NO_IO=1` skips per-iteration logs (faster, fewer debug files). Enabled automatically when `FOV_USE_OPENMP=1`.
+- `FOV_BF_COARSE_TO_FINE=1` enables coarse-to-fine BF (still exact if `FOV_BF_REQUIRE_GLOBAL=1`, default).
+- `FOV_BF_REQUIRE_GLOBAL=0` skips the full BF scan (faster, but not guaranteed global optimum).
+- `FOV_BF_COARSE_STRIDE=5` and `FOV_BF_REFINE_DEG=2` tune coarse stride/refine window.
+- `FOV_BF_CACHE_DIR=/path/to/bf_cache` overrides the BF cache location.
+
+Cache safety:
+- BF cache files include a signature header. If the signature doesn’t match the current map/pose/grid, the run exits with an error. Delete the cache file or run in a new results folder to recompute.
+
+### Standalone Map Generator
+
+If you want to iterate on clustered maps without running Monte Carlo optimization:
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/generate_cluster_map.py \
+  --clusters 8 \
+  --features-per-cluster 1000 \
+  --bounds -250 250 -250 250 0 10 \
+  --pose-resolution 20,20,1 \
+  --seed 42 \
+  --subsample-levels 10
+```
+
+This writes the map into `Map/` and saves a preview image into `Results/map_preview/`.
+Subsampled maps are written as `0_1_<map>.csv` ... `0_10_<map>.csv`.
+The generator writes a manifest `Map/<map>_manifest.yaml` to keep subsample
+level numbering consistent. Use the manifest with `--map-manifest` and select
+the subsample level with `--level`, or pass `--map` plus `--level` and the
+runner will auto-detect the manifest.
+
+### Runner Arguments
+
+Script: `My_FoV_Optimization/scripts/run_monte_carlo_experiment.py`
+
+Inputs:
+- `--root`  
+  Path to repo root. Default is the parent directory of the script.
+- `--build`  
+  Build the C++ binaries before running.
+- `--cmake`  
+  Force re-run `cmake ..` (useful if build files are stale).
+- `--manifold`  
+  Select which manifold implementation to compile (`current` or `backup`).
+- `--grid`  
+  Grid resolution as `X,Y,Z` or `XxYxZ`. Example `20x20x2`.  
+  This updates the `ExperimentManager(..., 1, X, Y, Z, 1, import_map, ...)` arguments
+  in `My_FoV_Optimization/Manifold_cpp/manifold_test.cpp` and triggers a rebuild.
+- `--map`  
+  Map file to load (relative to `Map/` or absolute). Overrides `--import-map`.
+- `--map-manifest`  
+  YAML manifest produced by `generate_cluster_map.py`. Use this with `--level`
+  to pick a subsample level.
+- `--pose-file`  
+  Pose CSV file to use (relative to `Map/` or absolute). Overrides manifest pose map.
+- `--bounds`  
+  Grid bounds `x_low,x_high,y_low,y_high,z_low,z_high`.
+- `--import-map`  
+  `1` loads map from disk. (`0` is no longer supported.)
+- `--clusters`  
+  Cluster count (ignored when `--import-map 1`, but required by the binary).
+- `--label`  
+  Optional label appended to output folder name.
+- `--move`  
+  Move outputs into the results folder instead of copying.
+
+### Inputs to the C++ experiment
+
+The C++ binary is `My_FoV_Optimization/Manifold_cpp/build/manifold_test`.
+It is called as:
+
+```bash
+./manifold_test <levels> <import_map> <clusters> <pose_csv>
+```
+
+Internals:
+- The map path is currently set in `My_FoV_Optimization/Manifold_cpp/manifold_test.cpp`.
+- The grid bounds and resolution are also set there.
+- The Monte Carlo loop runs in `My_FoV_Optimization/Manifold_cpp/monte_carlo/monte_carlo.h`.
+- Downsampling is handled by `My_FoV_Optimization/scripts/generate_cluster_map.py`.
+
+### Outputs
+
+During the run, raw outputs are written to:
+
+`/home/shekoufeh/fov_ws/My_FoV_Optimization/Data`
+
+The runner then collects all files modified in `Data/` and copies or moves them into:
+
+`/home/shekoufeh/fov_ws/My_FoV_Optimization/Results/monte_carlo/<timestamp>_<label>/data`
+
+It also writes:
+
+`/home/shekoufeh/fov_ws/My_FoV_Optimization/Results/monte_carlo/<timestamp>_<label>/run_info.txt`
+
+Common output files (prefix `0_1_`, `0_2_`, ...):
+- `*_single_run_rotated_quivers.csv` (optimized quivers)
+- `*_single_run_brute_force_rotated_quivers.csv` (brute‑force quivers)
+- `*_optimizer_accuracy_file.csv` (generated later by analysis script)
+- `*_optimizer_avg_time_file.csv`
+- `*_brute_force_avg_time_file.csv`
+- `*_bf_cache.csv` (brute‑force cache, in run-specific `bf_cache/`)
 
 
 ### Mapping  (step1)
