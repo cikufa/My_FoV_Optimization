@@ -6,30 +6,53 @@
 
 #include <manifold.h>
 #include <cloud_loader.h>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 class MonteCarloRun_FIF{
 public:
-	MonteCarloRun_FIF(int x_resolution,int y_resolution,int z_resolution,float x_low,float x_high,float y_low,float y_high,float z_low,float z_high,std::string prefix,std::string mapfilename){
+	MonteCarloRun_FIF(int x_resolution,int y_resolution,int z_resolution,float x_low,float x_high,float y_low,float y_high,float z_low,float z_high,std::string prefix,std::string mapfilename, std::string posefilename){
 
 		this->loader=new CloudLoader;
 		/*NOTE:I relaxed the map file name for convenient while debuging*/
-		this->loader->ImportFromXyzFile("/home/shekoufeh/fov_ws/My_FoV_Optimization/Map/two_walls_points_w.csv",1,true,false,",");
+		this->loader->ImportFromXyzFile(mapfilename,1,true,false,",");
 
 		this->optimizer_monte_carlo_total_time_us=0;
 		this->optimizer_monte_carlo_average_time_us=0;
 		this->brute_force_search_total_time_us=0;
 		this->brute_force_search_average_time_us=0;
 
-		this->quiversfile.open("../../Data/"+prefix+"single_run_rotated_quivers.csv");
-		this->brute_force_quiversfile.open("../../Data/"+prefix+"single_run_brute_force_rotated_quivers.csv");
-		this->montecarlopointsfile.open("../../Data/"+prefix+"montecarlo_points.csv");
+		const std::string quivers_path = "../../Data/" + prefix + "single_run_rotated_quivers.csv";
+		const std::string brute_force_quivers_path = "../../Data/" + prefix + "single_run_brute_force_rotated_quivers.csv";
+		const std::string montecarlopoints_path = "../../Data/" + prefix + "montecarlo_points.csv";
+		const std::string optimizer_avg_path = "../../Data/" + prefix + "optimizer_avg_time_file.csv";
+		const std::string brute_force_avg_path = "../../Data/" + prefix + "brute_force_avg_time_file.csv";
+		const std::string mean_path = "../../Data/mean.csv";
+		const std::string pointslist_path = "../../Data/pointslistfile.csv";
+		const std::string startingc_path = "../../Data/startingc.csv";
 
-		this->optimizer_avg_time_file.open("../../Data/"+prefix+"optimizer_avg_time_file.csv");
-		this->brute_force_avg_time_file.open("../../Data/"+prefix+"brute_force_avg_time_file.csv");
-		this->optimizer_accuracy_file.open("../../Data/"+prefix+"optimizer_accuracy_file.csv");
-		this->mean.open("../../Data/mean.csv" , std::ios::app);
-		this->pointslistfile.open("../../Data/pointslistfile.csv" , std::ios::app);
-		this->test.open("../../Data/startingc.csv" , std::ios::app);
+		this->quiversfile.open(quivers_path);
+		this->brute_force_quiversfile.open(brute_force_quivers_path);
+		this->montecarlopointsfile.open(montecarlopoints_path);
+
+		this->optimizer_avg_time_file.open(optimizer_avg_path);
+		this->brute_force_avg_time_file.open(brute_force_avg_path);
+		this->mean.open(mean_path, std::ios::app);
+		this->pointslistfile.open(pointslist_path, std::ios::app);
+		this->test.open(startingc_path, std::ios::app);
+
+		write_header_if_empty(quivers_path, this->quiversfile,
+		                      "ref_x,ref_y,ref_z,opt_dir_x,opt_dir_y,opt_dir_z");
+		write_header_if_empty(brute_force_quivers_path, this->brute_force_quiversfile,
+		                      "ref_x,ref_y,ref_z,bf_feat_x,bf_feat_y,bf_feat_z,bf_vis_x,bf_vis_y,bf_vis_z");
+		write_header_if_empty(montecarlopoints_path, this->montecarlopointsfile, "x,y,z");
+		write_header_if_empty(optimizer_avg_path, this->optimizer_avg_time_file, "time_us");
+		write_header_if_empty(brute_force_avg_path, this->brute_force_avg_time_file, "time_us");
+		write_header_if_empty(mean_path, this->mean,
+		                      "mean_me_x,mean_me_y,mean_me_z,mean_ch_x,mean_ch_y,mean_ch_z");
+		write_header_if_empty(pointslist_path, this->pointslistfile, "x,y,z");
+		write_header_if_empty(startingc_path, this->test, "x,y,z");
 
 		for (Eigen::Vector3f point: this->loader->get_pointcloud()){
 			this->montecarlopointsfile<<point[0]<<","<<point[1]<<","<<point[2]<<","<<std::endl;
@@ -40,8 +63,13 @@ public:
 		this->loader2=new CloudLoader;
 		this->loader2->ImportFromXyzFile("../../brute_force_xyz_indexes_two_degree.csv",1,true,false,",");
 		this->loader3=new CloudLoader;
-		// this->loader3->ImportFromXyzFile("../../Map/sampledtwc.csv",1,true,false,",");
-		this->loader3->ImportFromXyzFile("/home/shekoufeh/fov_ws/my_FIF-perception-aware-planning/act_map/fovtrace/sampledtwc100.csv",1,true,false,",");
+		this->loader3->ImportFromXyzFile(posefilename,1,true,false,",");
+
+		this->prefix = prefix;
+		this->bf_cache_path = "../../Data/" + prefix + "bf_cache.csv";
+		this->bf_cache_signature = build_bf_cache_signature(mapfilename, posefilename);
+		this->bf_cache_expected_poses = static_cast<size_t>(this->loader3->get_pointcloud_size());
+		init_bf_cache();
 
 		
 	}
@@ -69,11 +97,8 @@ public:
 
 	void run_monte_carlo_optimizer(void) {
 		int cnt = 0;		
-		int time_us;
+		int time_us = 0;
 		Eigen::Vector3f ref_point, starting_c,origin, quiver_head, brute_force_quiver_head_vis,brute_force_quiver_head_feat;
-		int brute_force_max_feature_holder, optimized_max_feature_holder;
-		float brute_force_max_visibility_holder, optimized_max_visibility_holder;
-		float degree_between;
 		for (Eigen::Vector3f ref_point:this->loader3->get_pointcloud()){
 			std::cout << "_______________________________________________________" << std::endl;
 			std::cout << "cam pose:  "<<ref_point<< std::endl;
@@ -117,20 +142,36 @@ public:
 			while (redo==1)
 			{
 				starting_c= starting_c_candidates[redo_cnt];
-				this->manifold=new FovOptimizerOnManifold("FOV_30degree.pdf",true,45.0,true,this->points_list,starting_c,true, ref_point, cnt);
+					this->manifold=new FovOptimizerOnManifold("FOV_30degree.pdf",true,15.0,true,this->points_list,starting_c,true, ref_point, cnt);
 				if(redo_cnt==0){
 					/*--------------------------------------------brute force-------------------------------------------------------*/
-					std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-					this->manifold->brute_force_search_with_visibility();
-					this->manifold->brute_force_search_with_feature_count();
-					std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-					time_us=std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+					bool used_cache = false;
+					if (bf_cache_loaded_ && static_cast<size_t>(cnt) < bf_cache_entries_.size()){
+						const BruteForceCacheEntry& entry = bf_cache_entries_[cnt];
+						brute_force_quiver_head_feat = entry.bf_feat;
+						brute_force_quiver_head_vis = entry.bf_vis;
+						time_us = 0;
+						used_cache = true;
+					}
+					if (!used_cache){
+						std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+						this->manifold->brute_force_search_with_visibility();
+						this->manifold->brute_force_search_with_feature_count();
+						std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+						time_us=std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+						brute_force_quiver_head_feat=this->manifold->get_brute_force_best_vector_feat();
+						brute_force_quiver_head_vis=this->manifold->get_brute_force_best_vector_vis();
+
+						if (bf_cache_out_.is_open()){
+							BruteForceCacheEntry entry;
+							entry.ref = ref_point;
+							entry.bf_feat = brute_force_quiver_head_feat;
+							entry.bf_vis = brute_force_quiver_head_vis;
+							append_bf_cache(entry);
+						}
+					}
 					this->brute_force_search_total_time_us+=(float)time_us;				
 					this->brute_force_avg_time_file<<std::to_string((float)time_us)<<std::endl;
-					brute_force_quiver_head_feat=this->manifold->get_brute_force_best_vector_feat();
-					brute_force_quiver_head_vis=this->manifold->get_brute_force_best_vector_vis();
-					brute_force_max_visibility_holder = this->manifold->get_brute_force_max_visibility();
-					brute_force_max_feature_holder = this->manifold->get_brute_force_max_feature();
 				}
 				
 				/*--------------------------------------------optimization-------------------------------------------------------*/
@@ -141,19 +182,13 @@ public:
 				this->optimizer_monte_carlo_total_time_us+=(float)time_us;
 				quiver_head=(this->manifold->get_R())*starting_c;
 				quiver_head=quiver_head/quiver_head.norm();
-				optimized_max_feature_holder = this->manifold->get_optimized_max_feature();
-				optimized_max_visibility_holder = this->manifold->get_optimized_max_visibility();
-				degree_between =acos(brute_force_quiver_head_vis.transpose()*quiver_head)*180.0/M_PI;
 				redo_cnt++;
 				delete this->manifold;
 				
 			}
-			float visibility_between= brute_force_max_visibility_holder- optimized_max_visibility_holder;
 			cnt++;
-			this->degree_diff_record.push_back(degree_between);
 			this->optimizer_avg_time_file<<std::to_string((float)time_us)<<std::endl;
 			this->quiversfile<< std::to_string(ref_point[0])<<","<< std::to_string(ref_point[1])<<","<< std::to_string(ref_point[2])<<","<< std::to_string(quiver_head[0])<<","<< std::to_string(quiver_head[1])<<","<< std::to_string(quiver_head[2])<<std::endl;
-			this->optimizer_accuracy_file<<std::to_string(degree_between)<<","<<std::to_string(brute_force_max_visibility_holder)<<","<<std::to_string(optimized_max_visibility_holder)<<","<<visibility_between<<std::endl;
 			this->brute_force_quiversfile<< std::to_string(ref_point[0])<<","<< std::to_string(ref_point[1])<<","<< std::to_string(ref_point[2])<<","<< 
 			std::to_string(brute_force_quiver_head_feat[0])<<","<< std::to_string(brute_force_quiver_head_feat[1])<<","<< std::to_string(brute_force_quiver_head_feat[2])
 			<<","<<std::to_string(brute_force_quiver_head_vis[0])<<","<< std::to_string(brute_force_quiver_head_vis[1])<<","<< std::to_string(brute_force_quiver_head_vis[2])
@@ -195,8 +230,6 @@ private:
  		float brute_force_search_total_time_us;
   		float brute_force_search_average_time_us;
 
-  		std::vector<float> degree_diff_record;
-
   		std::string prefix;
 
  		std::ofstream quiversfile;
@@ -211,8 +244,109 @@ private:
  		std::ofstream optimizer_avg_time_file;
  		std::ofstream brute_force_avg_time_file;
 
- 		std::ofstream optimizer_accuracy_file;
+		struct BruteForceCacheEntry {
+			Eigen::Vector3f ref;
+			Eigen::Vector3f bf_feat;
+			Eigen::Vector3f bf_vis;
+		};
 
+		std::vector<BruteForceCacheEntry> bf_cache_entries_;
+		std::string bf_cache_path;
+		std::string bf_cache_signature;
+		size_t bf_cache_expected_poses = 0;
+		bool bf_cache_loaded_ = false;
+		std::ofstream bf_cache_out_;
+
+		bool file_is_empty(const std::string& path){
+			std::ifstream in(path, std::ios::ate | std::ios::binary);
+			if (!in.good()){
+				return true;
+			}
+			return in.tellg() == 0;
+		}
+
+		void write_header_if_empty(const std::string& path, std::ofstream& stream, const std::string& header){
+			if (!stream.is_open()){
+				return;
+			}
+			if (file_is_empty(path)){
+				stream << header << std::endl;
+			}
+		}
+
+		std::string build_bf_cache_signature(const std::string& mapfilename, const std::string& posefilename){
+			std::ostringstream ss;
+			ss << "map=" << mapfilename
+			   << ";poses=" << posefilename
+			   << ";count=" << this->loader3->get_pointcloud_size();
+			return ss.str();
+		}
+
+		void init_bf_cache(){
+			if (load_bf_cache()){
+				if (bf_cache_entries_.size() >= bf_cache_expected_poses){
+					return;
+				}
+				bf_cache_out_.open(this->bf_cache_path, std::ios::app);
+				return;
+			}
+			bf_cache_entries_.clear();
+			bf_cache_out_.open(this->bf_cache_path, std::ios::out);
+			if (bf_cache_out_.is_open()){
+				bf_cache_out_ << "# signature:" << this->bf_cache_signature << std::endl;
+				bf_cache_out_ << "# columns: ref_x,ref_y,ref_z,bf_feat_x,bf_feat_y,bf_feat_z,bf_vis_x,bf_vis_y,bf_vis_z" << std::endl;
+			}
+		}
+
+		bool load_bf_cache(){
+			std::ifstream in(this->bf_cache_path);
+			if (!in.good()){
+				return false;
+			}
+			std::string header;
+			if (!std::getline(in, header)){
+				return false;
+			}
+			std::string expected = "# signature:" + this->bf_cache_signature;
+			if (header != expected){
+				return false;
+			}
+			std::string line;
+			while (std::getline(in, line)){
+				if (line.empty() || line[0] == '#'){
+					continue;
+				}
+				std::stringstream ss(line);
+				std::string token;
+				std::vector<double> vals;
+				while (std::getline(ss, token, ',')){
+					if (token.empty()){
+						continue;
+					}
+					vals.push_back(std::stod(token));
+				}
+				if (vals.size() < 9){
+					continue;
+				}
+				BruteForceCacheEntry entry;
+				entry.ref = Eigen::Vector3f(vals[0], vals[1], vals[2]);
+				entry.bf_feat = Eigen::Vector3f(vals[3], vals[4], vals[5]);
+				entry.bf_vis = Eigen::Vector3f(vals[6], vals[7], vals[8]);
+				bf_cache_entries_.push_back(entry);
+			}
+			bf_cache_loaded_ = true;
+			return true;
+		}
+
+		void append_bf_cache(const BruteForceCacheEntry& entry){
+			if (!bf_cache_out_.is_open()){
+				return;
+			}
+			bf_cache_out_ << entry.ref[0] << "," << entry.ref[1] << "," << entry.ref[2] << ","
+			             << entry.bf_feat[0] << "," << entry.bf_feat[1] << "," << entry.bf_feat[2] << ","
+			             << entry.bf_vis[0] << "," << entry.bf_vis[1] << "," << entry.bf_vis[2]
+			             << std::endl;
+		}
 
 };
 

@@ -7,7 +7,15 @@ import numpy as np
 
 
 def parse_bounds(s):
-    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if isinstance(s, (list, tuple)):
+        if len(s) == 1:
+            s = s[0]
+        else:
+            parts = [str(p).strip() for p in s if str(p).strip()]
+            if len(parts) != 6:
+                raise ValueError("bounds must be 6 values: x_low x_high y_low y_high z_low z_high")
+            return tuple(float(p) for p in parts)
+    parts = [p.strip() for p in str(s).split(",") if p.strip()]
     if len(parts) != 6:
         raise ValueError("bounds must be 6 comma-separated values: x_low,x_high,y_low,y_high,z_low,z_high")
     return tuple(float(p) for p in parts)
@@ -35,6 +43,16 @@ def parse_features(s, clusters):
     if len(values) != clusters:
         raise ValueError("features-per-cluster count must match --clusters")
     return values
+
+
+def parse_resolution(s):
+    parts = [p.strip() for p in str(s).split(",") if p.strip()]
+    if len(parts) != 3:
+        raise ValueError("pose-resolution must be 'nx,ny,nz'")
+    nx, ny, nz = (int(p) for p in parts)
+    if nx <= 0 or ny <= 0 or nz <= 0:
+        raise ValueError("pose-resolution values must be positive integers")
+    return nx, ny, nz
 
 
 def generate_cluster_points(rng, center, std, bounds, count):
@@ -84,8 +102,43 @@ def main():
     )
     parser.add_argument(
         "--bounds",
-        default="-250,250,-250,250,0,10",
+        nargs="+",
+        default=["-250,250,-250,250,0,10"],
         help="x_low,x_high,y_low,y_high,z_low,z_high",
+    )
+    parser.add_argument(
+        "--pose-count",
+        type=int,
+        default=0,
+        help="Number of poses to sample and save (0 disables).",
+    )
+    parser.add_argument(
+        "--pose-sample",
+        choices=["grid", "random"],
+        default="grid",
+        help="Pose sampling strategy.",
+    )
+    parser.add_argument(
+        "--pose-bounds",
+        nargs="+",
+        default=None,
+        help="Pose bounds x_low,x_high,y_low,y_high,z_low,z_high (default: map bounds).",
+    )
+    parser.add_argument(
+        "--pose-out",
+        default=None,
+        help="Pose CSV output (default: Map/<map_stem>_poses.csv).",
+    )
+    parser.add_argument(
+        "--pose-resolution",
+        default=None,
+        help="Grid resolution as nx,ny,nz (overrides --pose-count when provided).",
+    )
+    parser.add_argument(
+        "--pose-min-dist",
+        type=float,
+        default=None,
+        help="Minimum distance between poses for random sampling (default: auto from bounds and count; 0 disables).",
     )
     parser.add_argument(
         "--std-range",
@@ -109,9 +162,14 @@ def main():
         help="Random seed for reproducibility.",
     )
     parser.add_argument(
+        "--name",
+        default=None,
+        help="Name for map folder and file stem (Map/<name>/<name>_map.csv).",
+    )
+    parser.add_argument(
         "--map-out",
         default=None,
-        help="Output map filename (default: clusters<N>_map.csv in Map/).",
+        help="Output map filename (overrides --name).",
     )
     parser.add_argument(
         "--subsample-levels",
@@ -137,7 +195,7 @@ def main():
     parser.add_argument(
         "--plot-out",
         default=None,
-        help="Output plot filename (default: Results/map_preview/<timestamp>_<map>.png).",
+        help="Output plot filename (default: Map/<map_folder>/<map_stem>_preview.png).",
     )
     parser.add_argument(
         "--manifest-out",
@@ -156,6 +214,7 @@ def main():
     map_dir.mkdir(parents=True, exist_ok=True)
 
     bounds = parse_bounds(args.bounds)
+    pose_bounds = parse_bounds(args.pose_bounds) if args.pose_bounds else bounds
     std_min, std_max = parse_range(args.std_range, "std-range")
     dir_min, dir_max = parse_range(args.dir_range, "dir-range")
     unc_min, unc_max = parse_range(args.uncertainty_range, "uncertainty-range")
@@ -169,10 +228,32 @@ def main():
 
     features_per_cluster = parse_features(args.features_per_cluster, args.clusters)
 
-    map_name = args.map_out or f"clusters{args.clusters}_map.csv"
-    map_path = Path(map_name)
-    if not map_path.is_absolute():
-        map_path = map_dir / map_name
+    if args.name and args.map_out:
+        raise SystemExit("Use only one of --name or --map-out.")
+
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    if args.map_out:
+        map_path = Path(args.map_out)
+        if not map_path.is_absolute():
+            map_path = map_dir / map_path
+        if map_path.exists():
+            raise SystemExit(
+                f"Map already exists: {map_path}. Use a different --map-out or remove it."
+            )
+    elif args.name:
+        run_dir = map_dir / args.name
+        if run_dir.exists() and any(run_dir.iterdir()):
+            raise SystemExit(
+                f"Map folder already exists and is not empty: {run_dir}. "
+                "Choose a new --name."
+            )
+        run_dir.mkdir(parents=True, exist_ok=True)
+        map_path = run_dir / f"{args.name}_map.csv"
+    else:
+        run_dir = map_dir / f"{ts}_clusters{args.clusters}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        map_path = run_dir / f"clusters{args.clusters}_map.csv"
+    map_path.parent.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
     centers = rng.uniform(
@@ -288,15 +369,101 @@ def main():
         if not plot_path.is_absolute():
             plot_path = root / args.plot_out
     else:
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        plot_dir = root / "Results" / "map_preview"
-        plot_dir.mkdir(parents=True, exist_ok=True)
-        plot_path = plot_dir / f"{ts}_{map_path.stem}.png"
+        plot_path = map_path.with_name(f\"{map_path.stem}_preview.png\")
     fig.tight_layout()
     fig.savefig(plot_path, dpi=150)
 
     if args.show:
         plt.show()
+
+    pose_path = None
+    pose_min_dist = 0.0
+    pose_grid = None
+    if args.pose_count > 0 or args.pose_resolution:
+        pose_path = Path(args.pose_out) if args.pose_out else map_path.with_name(map_path.stem + "_poses.csv")
+        if not pose_path.is_absolute():
+            pose_path = map_dir / pose_path
+        low = np.array([pose_bounds[0], pose_bounds[2], pose_bounds[4]], dtype=float)
+        high = np.array([pose_bounds[1], pose_bounds[3], pose_bounds[5]], dtype=float)
+
+        effective_count = args.pose_count
+        if args.pose_resolution:
+            pose_grid = parse_resolution(args.pose_resolution)
+            effective_count = pose_grid[0] * pose_grid[1] * pose_grid[2]
+            if args.pose_count > 0 and effective_count != args.pose_count:
+                print("Note: --pose-resolution overrides --pose-count.")
+
+        dx = max(high[0] - low[0], 1e-6)
+        dy = max(high[1] - low[1], 1e-6)
+        dz = max(high[2] - low[2], 1e-6)
+        volume = dx * dy * dz
+        auto_spacing = (volume / max(effective_count, 1)) ** (1.0 / 3.0)
+
+        if args.pose_sample == "grid":
+            if pose_grid is None:
+                rx, ry, rz = dx, dy, dz
+                base = (max(effective_count, 1) / (rx * ry * rz)) ** (1.0 / 3.0)
+                cx = max(1, int(round(rx * base)))
+                cy = max(1, int(round(ry * base)))
+                cz = max(1, int(round(rz * base)))
+                best = None
+                for nx in range(max(1, cx - 3), cx + 4):
+                    for ny in range(max(1, cy - 3), cy + 4):
+                        for nz in range(max(1, cz - 3), cz + 4):
+                            prod = nx * ny * nz
+                            if prod == 0:
+                                continue
+                            diff = abs(prod - args.pose_count)
+                            ratio_err = abs(nx / ny - rx / ry) + abs(nx / nz - rx / rz)
+                            score = (diff, ratio_err)
+                            if best is None or score < best[0]:
+                                best = (score, (nx, ny, nz))
+                nx, ny, nz = best[1] if best else (cx, cy, cz)
+            else:
+                nx, ny, nz = pose_grid
+
+            xs = np.array([(low[0] + high[0]) * 0.5]) if nx == 1 else np.linspace(low[0], high[0], nx)
+            ys = np.array([(low[1] + high[1]) * 0.5]) if ny == 1 else np.linspace(low[1], high[1], ny)
+            zs = np.array([(low[2] + high[2]) * 0.5]) if nz == 1 else np.linspace(low[2], high[2], nz)
+            grid = np.meshgrid(xs, ys, zs, indexing="xy")
+            poses = np.column_stack([g.reshape(-1) for g in grid])
+            if args.pose_count > 0 and poses.shape[0] != args.pose_count:
+                print(
+                    f"Note: grid produced {poses.shape[0]} poses (requested {args.pose_count}). "
+                    "Adjust --pose-count or pass --pose-resolution."
+                )
+        else:
+            if args.pose_count <= 0:
+                raise SystemExit("Random pose sampling requires --pose-count > 0.")
+            if args.pose_min_dist is None:
+                pose_min_dist = 0.6 * auto_spacing
+            else:
+                pose_min_dist = float(args.pose_min_dist)
+
+            if pose_min_dist <= 0.0:
+                poses = rng.uniform(low=low, high=high, size=(args.pose_count, 3))
+            else:
+                min_dist_sq = pose_min_dist * pose_min_dist
+                poses = []
+                max_tries = max(1000, args.pose_count * 2000)
+                tries = 0
+                while len(poses) < args.pose_count and tries < max_tries:
+                    candidate = rng.uniform(low=low, high=high, size=3)
+                    if not poses:
+                        poses.append(candidate)
+                    else:
+                        deltas = np.asarray(poses) - candidate
+                        if np.min(np.einsum("ij,ij->i", deltas, deltas)) >= min_dist_sq:
+                            poses.append(candidate)
+                    tries += 1
+                if len(poses) < args.pose_count:
+                    print(
+                        "Warning: only placed "
+                        f"{len(poses)}/{args.pose_count} poses with min_dist={pose_min_dist:.3f}. "
+                        "Reduce --pose-min-dist or --pose-count if needed."
+                    )
+                poses = np.asarray(poses, dtype=float).reshape(-1, 3)
+        np.savetxt(pose_path, poses, delimiter=",", fmt="%.6f")
 
     manifest_path = None
     if args.manifest_out:
@@ -316,6 +483,12 @@ def main():
         f.write("version: 1\n")
         f.write(f"base_map: {rel_path(map_path)}\n")
         f.write(f"bounds: [{bounds[0]}, {bounds[1]}, {bounds[2]}, {bounds[3]}, {bounds[4]}, {bounds[5]}]\n")
+        f.write(f"pose_bounds: [{pose_bounds[0]}, {pose_bounds[1]}, {pose_bounds[2]}, {pose_bounds[3]}, {pose_bounds[4]}, {pose_bounds[5]}]\n")
+        f.write(f"pose_count: {poses.shape[0] if pose_path else 0}\n")
+        f.write(f"pose_sample: {args.pose_sample}\n")
+        if pose_grid is not None:
+            f.write(f"pose_grid: [{pose_grid[0]}, {pose_grid[1]}, {pose_grid[2]}]\n")
+        f.write(f"pose_min_dist: {pose_min_dist}\n")
         f.write(f"seed: {args.seed}\n")
         f.write(f"clusters: {args.clusters}\n")
         f.write("features_per_cluster: [" + ", ".join(str(v) for v in features_per_cluster) + "]\n")
@@ -332,12 +505,16 @@ def main():
                 f.write(f"  {level}: {rel_path(path)}\n")
         if dir_path:
             f.write(f"dir_map: {rel_path(dir_path)}\n")
+        if pose_path:
+            f.write(f"pose_map: {rel_path(pose_path)}\n")
 
     print(f"Map saved: {map_path}")
     if dir_path:
         print(f"Dir map saved: {dir_path}")
     print(f"Plot saved: {plot_path}")
     print(f"Manifest saved: {manifest_path}")
+    if pose_path:
+        print(f"Poses saved: {pose_path}")
 
 
 if __name__ == "__main__":
