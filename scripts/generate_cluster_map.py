@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import math
 import time
 from pathlib import Path
 
@@ -156,6 +157,24 @@ def main():
         help="Uncertainty range for clusters as min,max.",
     )
     parser.add_argument(
+        "--far-cluster-fraction",
+        type=float,
+        default=0.25,
+        help="Fraction of clusters forced away from map center (0 disables).",
+    )
+    parser.add_argument(
+        "--far-cluster-count",
+        type=int,
+        default=None,
+        help="Exact number of far clusters (overrides --far-cluster-fraction).",
+    )
+    parser.add_argument(
+        "--far-radius-frac",
+        type=float,
+        default=0.6,
+        help="Minimum radius as a fraction of half-diagonal for far clusters.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -256,11 +275,45 @@ def main():
     map_path.parent.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
-    centers = rng.uniform(
-        low=[bounds[0], bounds[2], bounds[4]],
-        high=[bounds[1], bounds[3], bounds[5]],
-        size=(args.clusters, 3),
-    )
+    low = np.array([bounds[0], bounds[2], bounds[4]], dtype=float)
+    high = np.array([bounds[1], bounds[3], bounds[5]], dtype=float)
+    center = (low + high) * 0.5
+    half = (high - low) * 0.5
+    max_radius = float(np.linalg.norm(half))
+    if args.far_radius_frac < 0.0:
+        raise SystemExit("--far-radius-frac must be >= 0.")
+    min_radius = args.far_radius_frac * max_radius
+
+    if args.far_cluster_count is not None:
+        far_count = max(0, int(args.far_cluster_count))
+    elif args.far_cluster_fraction > 0.0:
+        far_count = int(math.ceil(args.clusters * args.far_cluster_fraction))
+    else:
+        far_count = 0
+    far_count = min(far_count, args.clusters)
+
+    far_indices = set()
+    if far_count > 0 and min_radius > 0.0:
+        far_indices = set(rng.choice(args.clusters, size=far_count, replace=False).tolist())
+
+    centers = np.zeros((args.clusters, 3), dtype=float)
+    for idx in range(args.clusters):
+        if idx in far_indices and min_radius > 0.0:
+            placed = False
+            for _ in range(10000):
+                candidate = rng.uniform(low=low, high=high, size=3)
+                if np.linalg.norm(candidate - center) >= min_radius:
+                    centers[idx] = candidate
+                    placed = True
+                    break
+            if not placed:
+                print(
+                    "Warning: could not place far cluster after many attempts; "
+                    "falling back to unconstrained sampling."
+                )
+                centers[idx] = rng.uniform(low=low, high=high, size=3)
+        else:
+            centers[idx] = rng.uniform(low=low, high=high, size=3)
 
     points_list = []
     labels = []
@@ -369,7 +422,7 @@ def main():
         if not plot_path.is_absolute():
             plot_path = root / args.plot_out
     else:
-        plot_path = map_path.with_name(f\"{map_path.stem}_preview.png\")
+        plot_path = map_path.with_name(f"{map_path.stem}_preview.png")
     fig.tight_layout()
     fig.savefig(plot_path, dpi=150)
 
@@ -495,6 +548,10 @@ def main():
         f.write(f"std_range: [{std_min}, {std_max}]\n")
         f.write(f"dir_range: [{dir_min}, {dir_max}]\n")
         f.write(f"uncertainty_range: [{unc_min}, {unc_max}]\n")
+        f.write(f"far_cluster_fraction: {args.far_cluster_fraction}\n")
+        if args.far_cluster_count is not None:
+            f.write(f"far_cluster_count: {args.far_cluster_count}\n")
+        f.write(f"far_radius_frac: {args.far_radius_frac}\n")
         f.write(f"subsample_levels: {args.subsample_levels}\n")
         f.write(f"subsample_prefix: {args.subsample_prefix}\n")
         f.write(f"subsample_shuffle: {str(args.shuffle_before_subsample).lower()}\n")

@@ -233,6 +233,14 @@ def apply_axes_bounds(ax, bounds, z_scale=1.0):
     z_scale = max(float(z_scale), 1e-3)
     ax.set_box_aspect((ranges[0], ranges[1], ranges[2] * z_scale))
 
+    # Reduce Z tick density to avoid overlapping tick labels in 3D.
+    try:
+        from matplotlib.ticker import MaxNLocator
+
+        ax.zaxis.set_major_locator(MaxNLocator(nbins=6))
+    except Exception:
+        pass
+
 
 def compute_xy_density(points, max_bins=120, min_bins=20, gamma=0.7):
     if points is None or points.size == 0:
@@ -276,7 +284,16 @@ def _normalize_xy(vectors):
     return out
 
 
-def plot_top_view_quivers(points, opt_quivers, bf_quivers, log_rows, out_path, sample_points=0):
+def plot_top_view_quivers(
+    points,
+    opt_quivers,
+    bf_quivers,
+    log_rows,
+    out_path,
+    sample_points=0,
+    include_per_iter_opt_quivers=True,
+    include_init_opt_quivers=True,
+):
     import matplotlib.pyplot as plt
 
     if log_rows.size == 0:
@@ -304,28 +321,30 @@ def plot_top_view_quivers(points, opt_quivers, bf_quivers, log_rows, out_path, s
     ax.scatter(pose_points[:, 0], pose_points[:, 1], c="black", alpha=0.6, s=6)
 
     # All iteration quivers (very light).
-    refs_all = log_rows[:, 1:3]
-    dirs_all = _normalize_xy(log_rows[:, 4:6])
-    ax.quiver(
-        refs_all[:, 0], refs_all[:, 1],
-        dirs_all[:, 0] * scale, dirs_all[:, 1] * scale,
-        color="dimgray", alpha=0.18, angles="xy", scale_units="xy", scale=1,
-    )
+    if include_per_iter_opt_quivers:
+        refs_all = log_rows[:, 1:3]
+        dirs_all = _normalize_xy(log_rows[:, 4:6])
+        ax.quiver(
+            refs_all[:, 0], refs_all[:, 1],
+            dirs_all[:, 0] * (scale * 0.6), dirs_all[:, 1] * (scale * 0.6),
+            color="green", alpha=0.15, angles="xy", scale_units="xy", scale=1,
+        )
 
     # Initial quiver per pose (first logged iteration).
-    pose_ids = log_rows[:, 0].astype(int)
-    first_idx = {}
-    for idx, pid in enumerate(pose_ids):
-        if pid not in first_idx:
-            first_idx[pid] = idx
-    init_rows = log_rows[list(first_idx.values())]
-    refs_init = init_rows[:, 1:3]
-    dirs_init = _normalize_xy(init_rows[:, 4:6])
-    ax.quiver(
-        refs_init[:, 0], refs_init[:, 1],
-        dirs_init[:, 0] * scale, dirs_init[:, 1] * scale,
-        color="red", alpha=0.7, angles="xy", scale_units="xy", scale=1, label="Init",
-    )
+    if include_init_opt_quivers:
+        pose_ids = log_rows[:, 0].astype(int)
+        first_idx = {}
+        for idx, pid in enumerate(pose_ids):
+            if pid not in first_idx:
+                first_idx[pid] = idx
+        init_rows = log_rows[list(first_idx.values())]
+        refs_init = init_rows[:, 1:3]
+        dirs_init = _normalize_xy(init_rows[:, 4:6])
+        ax.quiver(
+            refs_init[:, 0], refs_init[:, 1],
+            dirs_init[:, 0] * (scale * 0.6), dirs_init[:, 1] * (scale * 0.6),
+            color="green", alpha=0.7, angles="xy", scale_units="xy", scale=1, label="Init",
+        )
 
     # Brute-force quivers.
     if bf_quivers is not None and bf_quivers.size:
@@ -333,17 +352,39 @@ def plot_top_view_quivers(points, opt_quivers, bf_quivers, log_rows, out_path, s
         dirs_bf = _normalize_xy(bf_quivers[:, 6:8])
         ax.quiver(
             refs_bf[:, 0], refs_bf[:, 1],
-            dirs_bf[:, 0] * scale, dirs_bf[:, 1] * scale,
-            color="blue", alpha=0.6, angles="xy", scale_units="xy", scale=1, label="BF",
+            dirs_bf[:, 0] * (scale * 0.6), dirs_bf[:, 1] * (scale * 0.6),
+            color="blue",
+            alpha=0.8,
+            angles="xy",
+            scale_units="xy",
+            scale=1,
+            width=0.0032,
+            linewidth=0.35,
+            edgecolor="black",
+            label="BF",
         )
 
     # Final optimized quivers.
     refs_final = opt_quivers[:, 0:2]
     dirs_final = _normalize_xy(opt_quivers[:, 3:5])
+    # Outline pass (black) so red stays visible when overlapping BF.
     ax.quiver(
         refs_final[:, 0], refs_final[:, 1],
-        dirs_final[:, 0] * scale, dirs_final[:, 1] * scale,
-        color="green", alpha=0.8, angles="xy", scale_units="xy", scale=1, label="Final",
+        dirs_final[:, 0] * (scale * 0.6), dirs_final[:, 1] * (scale * 0.6),
+        color="black", alpha=0.9, angles="xy", scale_units="xy", scale=1, width=0.0042,
+    )
+    ax.quiver(
+        refs_final[:, 0], refs_final[:, 1],
+        dirs_final[:, 0] * (scale * 0.6), dirs_final[:, 1] * (scale * 0.6),
+        color="red",
+        alpha=0.95,
+        angles="xy",
+        scale_units="xy",
+        scale=1,
+        width=0.0032,
+        linewidth=0.35,
+        edgecolor="black",
+        label="Final Opt",
     )
 
     if bounds is not None:
@@ -351,7 +392,7 @@ def plot_top_view_quivers(points, opt_quivers, bf_quivers, log_rows, out_path, s
         ax.set_xlim(mins[0], maxs[0])
         ax.set_ylim(mins[1], maxs[1])
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title("Top View: Init (red), Iter (gray), Final (green)")
+    ax.set_title("Top View: Opt (red), BF (blue), Init/Iter (green)")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.legend(loc="upper right")
@@ -620,15 +661,19 @@ def plot_quivers(points, opt_quivers, bf_quivers, out_path, sample_points=0, z_s
     for row in opt_quivers:
         ref = row[0:3]
         opt_dir = row[3:6]
+        ax.quiver(
+            ref[0], ref[1], ref[2], opt_dir[0], opt_dir[1], opt_dir[2],
+            color="black", length=scale * 0.62, normalize=True, alpha=0.65
+        )
         ax.quiver(ref[0], ref[1], ref[2], opt_dir[0], opt_dir[1], opt_dir[2],
-                  color="orange", length=scale, normalize=True, alpha=0.8)
+                  color="red", length=scale * 0.6, normalize=True, alpha=0.9)
     for row in bf_quivers:
         ref = row[0:3]
         bf_dir = row[6:9]
         ax.quiver(ref[0], ref[1], ref[2], bf_dir[0], bf_dir[1], bf_dir[2],
-                  color="blue", length=scale, normalize=True, alpha=0.5)
+                  color="blue", length=scale * 0.6, normalize=True, alpha=0.7)
 
-    ax.set_title("BF (blue) vs Opt (orange) Quivers")
+    ax.set_title("BF (blue) vs Opt (red) Quivers")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
@@ -638,7 +683,16 @@ def plot_quivers(points, opt_quivers, bf_quivers, out_path, sample_points=0, z_s
     plt.close(fig)
 
 
-def interactive_viewer_all(points, log_rows, bf_quivers, opt_quivers, sample_points=0, z_scale=1.0):
+def interactive_viewer_all(
+    points,
+    log_rows,
+    bf_quivers,
+    opt_quivers,
+    sample_points=0,
+    z_scale=1.0,
+    include_per_iter_opt_quivers=True,
+    include_init_opt_quivers=True,
+):
     import matplotlib.pyplot as plt
 
     if log_rows.size == 0:
@@ -667,25 +721,48 @@ def interactive_viewer_all(points, log_rows, bf_quivers, opt_quivers, sample_poi
     apply_axes_bounds(ax, bounds, z_scale=z_scale)
     scale = quiver_length_from_bounds(bounds)
 
-    refs = log_rows[:, 1:4]
-    dirs = log_rows[:, 4:7]
-    ax.quiver(refs[:, 0], refs[:, 1], refs[:, 2],
-              dirs[:, 0], dirs[:, 1], dirs[:, 2],
-              color="dimgray", length=scale, normalize=True, alpha=0.15)
+    if include_per_iter_opt_quivers:
+        refs = log_rows[:, 1:4]
+        dirs = log_rows[:, 4:7]
+        ax.quiver(refs[:, 0], refs[:, 1], refs[:, 2],
+                  dirs[:, 0], dirs[:, 1], dirs[:, 2],
+                  color="green", length=scale * 0.6, normalize=True, alpha=0.15)
+    elif include_init_opt_quivers:
+        # Plot only the initial (first iteration) quiver per pose.
+        pose_ids = log_rows[:, 0].astype(int)
+        first_idx = {}
+        for idx, pid in enumerate(pose_ids):
+            if pid not in first_idx:
+                first_idx[pid] = idx
+        init_rows = log_rows[list(first_idx.values())]
+        refs = init_rows[:, 1:4]
+        dirs = init_rows[:, 4:7]
+        ax.quiver(refs[:, 0], refs[:, 1], refs[:, 2],
+                  dirs[:, 0], dirs[:, 1], dirs[:, 2],
+                  color="green", length=scale * 0.6, normalize=True, alpha=0.6)
 
     bf_refs = bf_quivers[:, 0:3]
     bf_dirs = bf_quivers[:, 6:9]
     ax.quiver(bf_refs[:, 0], bf_refs[:, 1], bf_refs[:, 2],
               bf_dirs[:, 0], bf_dirs[:, 1], bf_dirs[:, 2],
-              color="blue", length=scale, normalize=True, alpha=0.35)
+              color="blue", length=scale * 0.6, normalize=True, alpha=0.55)
 
     opt_refs = opt_quivers[:, 0:3]
     opt_dirs = opt_quivers[:, 3:6]
     ax.quiver(opt_refs[:, 0], opt_refs[:, 1], opt_refs[:, 2],
               opt_dirs[:, 0], opt_dirs[:, 1], opt_dirs[:, 2],
-              color="green", length=scale, normalize=True, alpha=0.6)
+              color="black", length=scale * 0.62, normalize=True, alpha=0.5)
+    ax.quiver(opt_refs[:, 0], opt_refs[:, 1], opt_refs[:, 2],
+              opt_dirs[:, 0], opt_dirs[:, 1], opt_dirs[:, 2],
+              color="red", length=scale * 0.6, normalize=True, alpha=0.85)
 
-    ax.set_title("All Iterations (gray) + BF (blue) + Final Opt (green)")
+    if include_per_iter_opt_quivers:
+        title = "All Iterations (green) + BF (blue) + Final Opt (red)"
+    elif include_init_opt_quivers:
+        title = "Init (green) + BF (blue) + Final Opt (red)"
+    else:
+        title = "BF (blue) + Final Opt (red)"
+    ax.set_title(title)
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
@@ -700,6 +777,26 @@ def plot_comparison_feature_count(rows, out_path):
         print("No comparison data available; skipping feature count bars.")
         return
 
+    def _maybe_label_bars(ax, bars, max_labels=12, fmt="{:.2f}"):
+        # For paper: avoid clutter when many bars.
+        if len(bars) > max_labels:
+            return
+        try:
+            ax.bar_label(bars, padding=4, fontsize=7.5, fmt=fmt, rotation=90)
+        except Exception:
+            for rect in bars:
+                height = rect.get_height()
+                ax.text(
+                    rect.get_x() + rect.get_width() / 2,
+                    height,
+                    fmt.format(height),
+                    ha="center",
+                    va="bottom",
+                    fontsize=7.5,
+                    rotation=90,
+                    clip_on=False,
+                )
+
     rows = sorted(rows, key=lambda r: (r.get("level") is None, r.get("level", r["map_count"])))
     labels = [
         f"L{r['level']} ({r['map_count']})" if r.get("level") is not None else str(r["map_count"])
@@ -713,7 +810,8 @@ def plot_comparison_feature_count(rows, out_path):
     bf_counts = np.array([r["bf_count_mean"] for r in rows])
     bf_counts_std = np.array([r["bf_count_std"] for r in rows])
 
-    fig, ax = plt.subplots(figsize=(7.5, 5))
+    fig_w = max(8.0, 0.55 * len(rows) + 4.0)
+    fig, ax = plt.subplots(figsize=(fig_w, 5.2))
     bars_opt = ax.bar(x - width / 2, opt_counts, width, yerr=opt_counts_std,
                       capsize=4, label="Ours", color="tab:blue", alpha=0.65)
     bars_bf = ax.bar(x + width / 2, bf_counts, width, yerr=bf_counts_std,
@@ -722,20 +820,18 @@ def plot_comparison_feature_count(rows, out_path):
     ax.set_xlabel("Number of Features in the Map")
     ax.set_ylabel("Features in FOV")
     ax.set_xticks(x)
-    ax.set_xticklabels(labels)
+    ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=9)
     ax.legend()
+    ax.grid(axis="y", alpha=0.25, linestyle="--", linewidth=0.8)
     y_max = np.nanmax([opt_counts + opt_counts_std, bf_counts + bf_counts_std])
     if np.isfinite(y_max):
-        ax.set_ylim(0, y_max * 1.15)
+        ax.set_ylim(0, y_max * 1.20)
 
-    for bars in (bars_opt, bars_bf):
-        for rect in bars:
-            height = rect.get_height()
-            ax.text(rect.get_x() + rect.get_width() / 2, height,
-                    f"{height:.2f}", ha="center", va="bottom", fontsize=9)
+    _maybe_label_bars(ax, bars_opt)
+    _maybe_label_bars(ax, bars_bf)
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=200)
     plt.close(fig)
 
 
@@ -745,6 +841,26 @@ def plot_comparison_visibility(rows, out_path):
     if not rows:
         print("No comparison data available; skipping visibility bars.")
         return
+
+    def _maybe_label_bars(ax, bars, max_labels=10, fmt="{:.2f}"):
+        # Visibility labels overlap easily; only annotate small-N.
+        if len(bars) > max_labels:
+            return
+        try:
+            ax.bar_label(bars, padding=4, fontsize=7.5, fmt=fmt, rotation=90)
+        except Exception:
+            for rect in bars:
+                height = rect.get_height()
+                ax.text(
+                    rect.get_x() + rect.get_width() / 2,
+                    height,
+                    fmt.format(height),
+                    ha="center",
+                    va="bottom",
+                    fontsize=7.5,
+                    rotation=90,
+                    clip_on=False,
+                )
 
     rows = sorted(rows, key=lambda r: (r.get("level") is None, r.get("level", r["map_count"])))
     labels = [
@@ -759,7 +875,8 @@ def plot_comparison_visibility(rows, out_path):
     bf_vis = np.array([r["bf_vis_mean"] for r in rows])
     bf_vis_std = np.array([r["bf_vis_std"] for r in rows])
 
-    fig, ax = plt.subplots(figsize=(7.5, 5))
+    fig_w = max(8.0, 0.55 * len(rows) + 4.0)
+    fig, ax = plt.subplots(figsize=(fig_w, 5.2))
     bars_opt = ax.bar(x - width / 2, opt_vis, width, yerr=opt_vis_std,
                       capsize=4, label="Ours", color="tab:blue", alpha=0.65)
     bars_bf = ax.bar(x + width / 2, bf_vis, width, yerr=bf_vis_std,
@@ -768,20 +885,18 @@ def plot_comparison_visibility(rows, out_path):
     ax.set_xlabel("Number of Features in the Map")
     ax.set_ylabel("Visibility (sigmoid sum)")
     ax.set_xticks(x)
-    ax.set_xticklabels(labels)
+    ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=9)
     ax.legend()
+    ax.grid(axis="y", alpha=0.25, linestyle="--", linewidth=0.8)
     y_max = np.nanmax([opt_vis + opt_vis_std, bf_vis + bf_vis_std])
     if np.isfinite(y_max):
-        ax.set_ylim(0, y_max * 1.15)
+        ax.set_ylim(0, y_max * 1.20)
 
-    for bars in (bars_opt, bars_bf):
-        for rect in bars:
-            height = rect.get_height()
-            ax.text(rect.get_x() + rect.get_width() / 2, height,
-                    f"{height:.2f}", ha="center", va="bottom", fontsize=9)
+    _maybe_label_bars(ax, bars_opt)
+    _maybe_label_bars(ax, bars_bf)
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=200)
     plt.close(fig)
 
 
@@ -791,6 +906,27 @@ def plot_comparison_time(rows, out_path):
     if not rows:
         print("No comparison data available; skipping time bars.")
         return
+
+    def _maybe_label_bars(ax, bars, max_labels=12, fmt="{:.1f}"):
+        if len(bars) > max_labels:
+            return
+        try:
+            ax.bar_label(bars, padding=4, fontsize=7.5, fmt=fmt, rotation=90)
+        except Exception:
+            for rect in bars:
+                height = rect.get_height()
+                if not np.isfinite(height):
+                    continue
+                ax.text(
+                    rect.get_x() + rect.get_width() / 2,
+                    height,
+                    fmt.format(height),
+                    ha="center",
+                    va="bottom",
+                    fontsize=7.5,
+                    rotation=90,
+                    clip_on=False,
+                )
 
     rows = sorted(rows, key=lambda r: (r.get("level") is None, r.get("level", r["map_count"])))
     labels = [
@@ -805,7 +941,8 @@ def plot_comparison_time(rows, out_path):
     bf_time = np.array([r.get("bf_time_mean_ms", np.nan) for r in rows])
     bf_time_std = np.array([r.get("bf_time_std_ms", np.nan) for r in rows])
 
-    fig, ax = plt.subplots(figsize=(7.5, 5))
+    fig_w = max(8.0, 0.55 * len(rows) + 4.0)
+    fig, ax = plt.subplots(figsize=(fig_w, 5.2))
     if np.all(np.isnan(opt_time)) or np.all(np.isnan(bf_time)):
         ax.text(0.5, 0.5, "Time data not found", ha="center", va="center")
     else:
@@ -817,21 +954,91 @@ def plot_comparison_time(rows, out_path):
         ax.set_xlabel("Number of Features in the Map")
         ax.set_ylabel("Average Time (ms)")
         ax.set_xticks(x)
-        ax.set_xticklabels(labels)
+        ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=9)
         ax.legend()
+        ax.grid(axis="y", alpha=0.25, linestyle="--", linewidth=0.8)
         y_max = np.nanmax([opt_time + opt_time_std, bf_time + bf_time_std])
         if np.isfinite(y_max):
-            ax.set_ylim(0, y_max * 1.15)
+            ax.set_ylim(0, y_max * 1.20)
 
-        for bars in (bars_opt, bars_bf):
-            for rect in bars:
-                height = rect.get_height()
-                ax.text(rect.get_x() + rect.get_width() / 2, height,
-                        f"{height:.2f}", ha="center", va="bottom", fontsize=9)
+        _maybe_label_bars(ax, bars_opt)
+        _maybe_label_bars(ax, bars_bf)
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=200)
     plt.close(fig)
+
+
+def write_comparison_summary(rows, out_csv_path, out_txt_path):
+    if not rows:
+        return
+    import csv
+
+    def _arr(key):
+        return np.array([r.get(key, np.nan) for r in rows], dtype=float)
+
+    metrics = [
+        ("time_ms", _arr("opt_time_mean_ms"), _arr("bf_time_mean_ms")),
+        ("visibility", _arr("opt_vis_mean"), _arr("bf_vis_mean")),
+        ("feature_count", _arr("opt_count_mean"), _arr("bf_count_mean")),
+    ]
+
+    out_rows = []
+    for name, opt_v, bf_v in metrics:
+        opt_mean = float(np.nanmean(opt_v)) if np.any(np.isfinite(opt_v)) else float("nan")
+        opt_std = float(np.nanstd(opt_v)) if np.any(np.isfinite(opt_v)) else float("nan")
+        bf_mean = float(np.nanmean(bf_v)) if np.any(np.isfinite(bf_v)) else float("nan")
+        bf_std = float(np.nanstd(bf_v)) if np.any(np.isfinite(bf_v)) else float("nan")
+        delta = bf_mean - opt_mean if np.isfinite(bf_mean) and np.isfinite(opt_mean) else float("nan")
+        ratio = (
+            bf_mean / opt_mean
+            if np.isfinite(bf_mean) and np.isfinite(opt_mean) and abs(opt_mean) > 1e-12
+            else float("nan")
+        )
+        out_rows.append(
+            {
+                "metric": name,
+                "opt_mean": opt_mean,
+                "opt_std": opt_std,
+                "bf_mean": bf_mean,
+                "bf_std": bf_std,
+                "bf_minus_opt": delta,
+                "bf_div_opt": ratio,
+                "n": int(len(rows)),
+            }
+        )
+
+    out_csv_path = Path(out_csv_path)
+    out_txt_path = Path(out_txt_path)
+    out_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with out_csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "metric",
+                "opt_mean",
+                "opt_std",
+                "bf_mean",
+                "bf_std",
+                "bf_minus_opt",
+                "bf_div_opt",
+                "n",
+            ],
+        )
+        writer.writeheader()
+        for r in out_rows:
+            writer.writerow(r)
+
+    with out_txt_path.open("w", encoding="utf-8") as f:
+        f.write("Comparison summary (aggregated over prefixes)\n")
+        f.write(f"n={len(rows)}\n\n")
+        for r in out_rows:
+            f.write(f"{r['metric']}:\n")
+            f.write(f"  opt_mean={r['opt_mean']:.6g}, opt_std={r['opt_std']:.6g}\n")
+            f.write(f"  bf_mean={r['bf_mean']:.6g}, bf_std={r['bf_std']:.6g}\n")
+            f.write(f"  bf-opt={r['bf_minus_opt']:.6g}\n")
+            f.write(f"  bf/opt={r['bf_div_opt']:.6g}\n\n")
 
 
 def main():
@@ -844,7 +1051,19 @@ def main():
     parser.add_argument("--ks", type=float, default=15.0, help="Sigmoid sharpness.")
     parser.add_argument("--show", action="store_true", help="Show interactive 3D viewer.")
     parser.add_argument("--plot-sample", type=int, default=0, help="Max map points to render (0 = no downsample).")
-    parser.add_argument("--z-scale", type=float, default=2.0, help="Scale Z aspect for 3D plots.")
+    parser.add_argument("--z-scale", type=float, default=4.0, help="Scale Z aspect for 3D plots.")
+    parser.add_argument(
+        "--per-iter-opt-quivers",
+        choices=["include", "exclude"],
+        default="include",
+        help="Include per-iteration optimization quivers in 2D/3D plots.",
+    )
+    parser.add_argument(
+        "--init-opt-quiver",
+        choices=["include", "exclude"],
+        default="include",
+        help="Include the initial (first-iteration) optimization quiver per pose.",
+    )
     parser.add_argument("--per-pose", action="store_true", help="Also plot per-pose metrics.")
 
     args = parser.parse_args()
@@ -923,6 +1142,8 @@ def main():
     dense_map_path = resolve_base_map(map_path)
     dense_map_points = load_map_points(dense_map_path) if dense_map_path else None
 
+    densest_view = None  # (map_count, points_for_view, log_rows, bf_quivers, opt_quivers)
+
     for prefix in prefixes:
         prefix_map_path = resolve_map_for_prefix(prefix, map_path)
         if prefix_map_path is None or not prefix_map_path.exists():
@@ -938,8 +1159,12 @@ def main():
         opt_quivers = load_csv(opt_path, skiprows=1)
         bf_quivers = load_csv(bf_path, skiprows=1)
 
-        log_path = data_dir / "quiversforonepoint.csv"
-        log_rows = load_csv_tail(log_path, prev_lines) if log_path.exists() else np.zeros((0, 0))
+        per_prefix_log = data_dir / f"{prefix}quiversforonepoint.csv"
+        if per_prefix_log.exists():
+            log_rows = load_csv(per_prefix_log)
+        else:
+            log_path = data_dir / "quiversforonepoint.csv"
+            log_rows = load_csv_tail(log_path, prev_lines) if log_path.exists() else np.zeros((0, 0))
 
         per_pose = compute_per_pose_metrics(
             map_points, opt_quivers, bf_quivers, args.visibility_angle, args.ks
@@ -977,17 +1202,16 @@ def main():
             log_rows,
             top_view_png,
             sample_points=args.plot_sample,
+            include_per_iter_opt_quivers=args.per_iter_opt_quivers == "include",
+            include_init_opt_quivers=args.init_opt_quiver == "include",
         )
 
         if args.show:
-            interactive_viewer_all(
-                dense_map_points if dense_map_points is not None else map_points,
-                log_rows,
-                bf_quivers,
-                opt_quivers,
-                sample_points=args.plot_sample,
-                z_scale=args.z_scale,
-            )
+            map_count = int(map_points.shape[0])
+            points_for_view = dense_map_points if dense_map_points is not None else map_points
+            candidate = (map_count, points_for_view, log_rows, bf_quivers, opt_quivers)
+            if densest_view is None or candidate[0] > densest_view[0]:
+                densest_view = candidate
 
         opt_counts = per_pose[:, 3]
         bf_counts = per_pose[:, 4]
@@ -1039,6 +1263,24 @@ def main():
         plot_comparison_feature_count(comparison_rows, count_png)
         plot_comparison_visibility(comparison_rows, vis_png)
         plot_comparison_time(comparison_rows, time_png)
+
+    if args.show and densest_view is not None:
+        _, points_for_view, log_rows, bf_quivers, opt_quivers = densest_view
+        interactive_viewer_all(
+            points_for_view,
+            log_rows,
+            bf_quivers,
+            opt_quivers,
+            sample_points=args.plot_sample,
+            z_scale=args.z_scale,
+            include_per_iter_opt_quivers=args.per_iter_opt_quivers == "include",
+            include_init_opt_quivers=args.init_opt_quiver == "include",
+        )
+        write_comparison_summary(
+            comparison_rows,
+            output_dir / "comparison_summary.csv",
+            output_dir / "comparison_summary.txt",
+        )
 
 
 if __name__ == "__main__":

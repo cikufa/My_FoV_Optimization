@@ -161,6 +161,16 @@ def find_pose_for_map(root, map_path):
     return None
 
 
+def resolve_map_relative_path(root, user_path):
+    path = Path(user_path)
+    if path.is_absolute():
+        return path
+    parts = path.parts
+    if parts and parts[0] == "Map":
+        return root / path
+    return root / "Map" / path
+
+
 def build_bf_cache_signature(map_name, pose_name, grid=None, bounds=None):
     if pose_name:
         return f"map={map_name};pose={pose_name}"
@@ -194,6 +204,14 @@ def seed_bf_cache(root, signatures, dest_dir):
             shutil.copy2(str(path), str(dest))
             copied.append(dest)
     return copied
+
+
+def read_cache_signature_line(path):
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return f.readline().strip()
+    except OSError:
+        return None
 
 
 def patch_grid_resolution(manifold_test_path, grid):
@@ -356,6 +374,11 @@ def main():
         help="Subsample level to use when --map/--map-manifest is provided.",
     )
     parser.add_argument(
+        "--all-levels",
+        action="store_true",
+        help="Run all subsample levels from the manifest in one run folder.",
+    )
+    parser.add_argument(
         "--pose-file",
         default=None,
         help="Pose CSV file to use (relative to Map/ or absolute). Overrides manifest pose_map.",
@@ -363,7 +386,7 @@ def main():
     parser.add_argument(
         "--bounds",
         default=None,
-        help="Grid bounds x_low,x_high,y_low,y_high,z_low,z_high (updates manifold_test.cpp).",
+        help="Grid bounds x_low,x_high,y_low,y_high,z_low,z_high (passed via env to binary).",
     )
     parser.add_argument(
         "--import-map",
@@ -409,6 +432,10 @@ def main():
 
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.all_levels and args.level is not None:
+        print("Ignoring --level because --all-levels was set.", file=sys.stderr)
+        args.level = None
+
     if args.map_name:
         if args.map or args.map_manifest:
             print("Use only one of --map-name, --map, or --map-manifest.", file=sys.stderr)
@@ -438,6 +465,7 @@ def main():
     bounds = parse_bounds(args.bounds) if args.bounds else None
     manifest = None
     manifest_path = None
+    subsample_maps = None
 
     if args.map_manifest:
         manifest_path = Path(args.map_manifest)
@@ -481,9 +509,7 @@ def main():
                 pose_path = root / pose_path
 
     if args.map:
-        map_path = Path(args.map)
-        if not map_path.is_absolute():
-            map_path = root / "Map" / args.map
+        map_path = resolve_map_relative_path(root, args.map)
         if not map_path.exists():
             print(f"Map not found: {map_path}", file=sys.stderr)
             sys.exit(2)
@@ -521,9 +547,7 @@ def main():
             sys.exit(2)
 
     if args.pose_file:
-        pose_path = Path(args.pose_file)
-        if not pose_path.is_absolute():
-            pose_path = root / "Map" / args.pose_file
+        pose_path = resolve_map_relative_path(root, args.pose_file)
         if not pose_path.exists():
             print(f"Pose file not found: {pose_path}", file=sys.stderr)
             sys.exit(2)
@@ -566,18 +590,53 @@ def main():
             print("Grid change detected; enabling build.")
             args.build = True
 
-    map_changed = False
-    if map_name is not None or map_output is not None or bounds is not None:
-        map_changed = patch_map_settings(
-            manifold_test_path,
-            map_name=map_name,
-            map_output=map_output,
-            bounds=bounds,
-            mode="import",
-        )
-        if map_changed and not args.build:
-            print("Map settings changed; enabling build.")
-            args.build = True
+    base_map_path = map_path
+    subsample_prefix = "0"
+    if manifest and isinstance(manifest, dict):
+        subsample_prefix = str(manifest.get("subsample_prefix", "0"))
+
+    levels_to_run = [args.level] if args.level is not None else [None]
+    if args.all_levels:
+        if not subsample_maps or not isinstance(subsample_maps, dict):
+            print("No subsample_levels found in manifest for --all-levels.", file=sys.stderr)
+            sys.exit(2)
+        level_vals = []
+        for key in subsample_maps.keys():
+            try:
+                level_vals.append(int(key))
+            except (TypeError, ValueError):
+                continue
+        if not level_vals:
+            print("No numeric subsample levels found in manifest.", file=sys.stderr)
+            sys.exit(2)
+        levels_to_run = sorted(set(level_vals))
+
+    def resolve_level_map(level):
+        if level is None:
+            return base_map_path
+        entry = None
+        if isinstance(subsample_maps, dict):
+            entry = subsample_maps.get(str(level))
+            if entry is None:
+                entry = subsample_maps.get(level)
+        if entry is None:
+            print(f"Level {level} not found in manifest.", file=sys.stderr)
+            sys.exit(2)
+        path = Path(str(entry))
+        if not path.is_absolute():
+            path = root / path
+        if not path.exists():
+            print(f"Map not found: {path}", file=sys.stderr)
+            sys.exit(2)
+        return path
+
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    label = f"_{args.label}" if args.label else ""
+    run_dir = root / "Results" / "monte_carlo" / f"{ts}{label}"
+    out_dir = run_dir / "data"
+    bf_cache_dir = run_dir / "bf_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bf_cache_dir.mkdir(parents=True, exist_ok=True)
 
     if args.build:
         build_dir.mkdir(parents=True, exist_ok=True)
@@ -590,55 +649,144 @@ def main():
         print("Run with --build or build manually first.", file=sys.stderr)
         sys.exit(1)
 
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    label = f"_{args.label}" if args.label else ""
-    run_dir = root / "Results" / "monte_carlo" / f"{ts}{label}"
-    out_dir = run_dir / "data"
-    bf_cache_dir = run_dir / "bf_cache"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    bf_cache_dir.mkdir(parents=True, exist_ok=True)
-
-    signature = build_bf_cache_signature(map_name, pose_name, grid, bounds)
-    alt_signature = build_bf_cache_signature(str(map_path.resolve()), str(pose_path.resolve()), grid, bounds)
-    signatures = [signature]
-    if alt_signature != signature:
-        signatures.append(alt_signature)
-    seeded = seed_bf_cache(root, signatures, bf_cache_dir)
-
-    before = {p: p.stat().st_mtime for p in data_dir.glob("*") if p.is_file()}
-    before_lines = {}
-    for name in ["quiversforonepoint.csv"]:
-        path = data_dir / name
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                before_lines[name] = sum(1 for _ in f)
-        else:
-            before_lines[name] = 0
-    start_time = time.time()
-
     cmd = [str(bin_path), str(args.levels), str(args.import_map), str(args.clusters)]
     if pose_name:
         cmd.append(pose_name)
-    env = os.environ.copy()
-    env["FOV_BF_CACHE_DIR"] = str(bf_cache_dir)
-    env["FOV_MINIMAL_LOG"] = "1"
-    run_cmd(cmd, cwd=str(build_dir), env=env)
+    move_outputs = args.move and not args.all_levels
+    all_copied = []
+    seeded_all = []
+    signatures_all = []
+    map_paths_run = []
 
-    changed = []
-    for p in data_dir.glob("*"):
-        if not p.is_file():
-            continue
-        mtime = p.stat().st_mtime
-        if mtime >= start_time or p not in before or mtime != before[p]:
-            changed.append(p)
+    for level in levels_to_run:
+        level_map_path = resolve_level_map(level)
+        map_paths_run.append((level, level_map_path))
 
-    for p in changed:
-        dest = out_dir / p.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if args.move:
-            shutil.move(str(p), str(dest))
-        else:
-            shutil.copy2(str(p), str(dest))
+        map_root = root / "Map"
+        try:
+            rel_map = level_map_path.relative_to(map_root)
+            map_name = f"../../Map/{rel_map.as_posix()}"
+        except ValueError:
+            map_name = str(level_map_path)
+        map_output = level_map_path.name
+
+        signature = build_bf_cache_signature(map_name, pose_name, grid, bounds)
+        alt_signature = build_bf_cache_signature(
+            str(level_map_path.resolve()),
+            str(pose_path.resolve()),
+            grid,
+            bounds,
+        )
+        signatures = [signature]
+        if alt_signature != signature:
+            signatures.append(alt_signature)
+        for sig in signatures:
+            if sig not in signatures_all:
+                signatures_all.append(sig)
+        seeded = seed_bf_cache(root, signatures, bf_cache_dir)
+        seeded_all.extend(seeded)
+
+        # The C++ binary reads/writes 0_1_bf_cache.csv as the active cache file.
+        # For all-levels, swap in the current level's cache (if available) and
+        # remove stale mismatched active cache to prevent signature aborts.
+        source_prefix = "0_1_"
+        target_prefix = None
+        if args.all_levels and level is not None:
+            target_prefix = f"{subsample_prefix}_{level}_"
+        active_cache = bf_cache_dir / f"{source_prefix}bf_cache.csv"
+        if target_prefix and target_prefix != source_prefix:
+            level_cache = bf_cache_dir / f"{target_prefix}bf_cache.csv"
+            if level_cache.exists():
+                shutil.copy2(str(level_cache), str(active_cache))
+                print(f"[cache] level {level}: loaded local cache {level_cache.name} -> {active_cache.name}")
+        elif active_cache.exists():
+            print(f"[cache] level {level if level is not None else 'base'}: using active cache {active_cache.name}")
+        if seeded:
+            print(f"[cache] level {level if level is not None else 'base'}: seeded {len(seeded)} cache file(s) from prior runs")
+        if active_cache.exists():
+            header = read_cache_signature_line(active_cache)
+            expected = {f"# signature:{sig}" for sig in signatures}
+            if header not in expected:
+                print(
+                    f"[cache] level {level if level is not None else 'base'}: "
+                    "removed stale active cache due to signature mismatch"
+                )
+                active_cache.unlink()
+            else:
+                print(f"[cache] level {level if level is not None else 'base'}: cache signature match")
+
+        before = {p: p.stat().st_mtime for p in data_dir.glob("*") if p.is_file()}
+        before_lines = {}
+        for name in ["quiversforonepoint.csv"]:
+            path = data_dir / name
+            if path.exists():
+                with path.open("r", encoding="utf-8") as f:
+                    before_lines[name] = sum(1 for _ in f)
+            else:
+                before_lines[name] = 0
+        start_time = time.time()
+
+        env = os.environ.copy()
+        env["FOV_BF_CACHE_DIR"] = str(bf_cache_dir)
+        env["FOV_MINIMAL_LOG"] = "1"
+        if map_name is not None:
+            env["FOV_MAP_PATH"] = map_name
+        if map_output is not None:
+            env["FOV_MAP_OUTPUT"] = map_output
+        if bounds is not None:
+            env["FOV_BOUNDS"] = ",".join(str(x) for x in bounds)
+        run_cmd(cmd, cwd=str(build_dir), env=env)
+
+        changed = []
+        for p in data_dir.glob("*"):
+            if not p.is_file():
+                continue
+            mtime = p.stat().st_mtime
+            if mtime >= start_time or p not in before or mtime != before[p]:
+                changed.append(p)
+
+        source_prefix = "0_1_"
+
+        for p in changed:
+            if p.name == "quiversforonepoint.csv" and args.all_levels and target_prefix:
+                dest_name = f"{target_prefix}quiversforonepoint.csv"
+                dest = out_dir / dest_name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with p.open("r", encoding="utf-8", errors="ignore") as src:
+                    lines = src.readlines()
+                tail = lines[before_lines.get("quiversforonepoint.csv", 0):]
+                if tail and any(ch.isalpha() for ch in tail[0]):
+                    tail = tail[1:]
+                with dest.open("w", encoding="utf-8") as out_f:
+                    out_f.writelines(tail)
+                all_copied.append(dest_name)
+                continue
+
+            dest_name = p.name
+            if target_prefix:
+                if dest_name.startswith(source_prefix):
+                    dest_name = target_prefix + dest_name[len(source_prefix):]
+                else:
+                    dest_name = target_prefix + dest_name
+            dest = out_dir / dest_name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if move_outputs:
+                shutil.move(str(p), str(dest))
+            else:
+                shutil.copy2(str(p), str(dest))
+            all_copied.append(dest_name)
+
+        if target_prefix:
+            cache_src = bf_cache_dir / f"{source_prefix}bf_cache.csv"
+            if cache_src.exists():
+                cache_dest = bf_cache_dir / f"{target_prefix}bf_cache.csv"
+                if cache_src.resolve() == cache_dest.resolve():
+                    continue
+                if cache_dest.exists():
+                    shutil.copy2(str(cache_src), str(cache_dest))
+                    cache_src.unlink()
+                else:
+                    cache_src.rename(cache_dest)
 
     info_path = run_dir / "run_info.txt"
     with info_path.open("w", encoding="utf-8") as f:
@@ -646,16 +794,30 @@ def main():
         f.write(f"levels: {args.levels}\n")
         f.write(f"import_map: {args.import_map}\n")
         f.write(f"clusters: {args.clusters}\n")
-        f.write(f"map_path: {map_path}\n")
+        f.write(f"all_levels: {str(args.all_levels).lower()}\n")
+        f.write(f"map_path: {base_map_path}\n")
         if manifest_path is not None:
             f.write(f"map_manifest: {manifest_path}\n")
+        if args.all_levels:
+            levels_str = ", ".join(str(l) for l in levels_to_run if l is not None)
+            f.write(f"levels_run: [{levels_str}]\n")
+            f.write("map_paths:\n")
+            for level, path in map_paths_run:
+                label = "base" if level is None else str(level)
+                f.write(f"- {label}: {path}\n")
         if pose_path is not None:
             f.write(f"pose_path: {pose_path}\n")
         f.write(f"bf_cache_dir: {bf_cache_dir}\n")
-        f.write(f"bf_cache_signature: {signature}\n")
-        if seeded:
+        if signatures_all:
+            if len(signatures_all) == 1:
+                f.write(f"bf_cache_signature: {signatures_all[0]}\n")
+            else:
+                f.write("bf_cache_signatures:\n")
+                for sig in signatures_all:
+                    f.write(f"- {sig}\n")
+        if seeded_all:
             f.write("bf_cache_seeded_from:\n")
-            for path in seeded:
+            for path in seeded_all:
                 f.write(f"- {path}\n")
         if bounds is not None:
             f.write(f"bounds: {','.join(str(x) for x in bounds)}\n")
@@ -664,10 +826,11 @@ def main():
         f.write(f"binary: {bin_path}\n")
         f.write(f"data_dir: {data_dir}\n")
         f.write(f"output_dir: {out_dir}\n")
-        f.write(f"quiversforonepoint_prev_lines: {before_lines.get('quiversforonepoint.csv', 0)}\n")
+        prev_lines_val = 0 if args.all_levels else before_lines.get("quiversforonepoint.csv", 0)
+        f.write(f"quiversforonepoint_prev_lines: {prev_lines_val}\n")
         f.write("files:\n")
-        for p in sorted(changed, key=lambda x: x.name):
-            f.write(f"- {p.name}\n")
+        for name in sorted(set(all_copied)):
+            f.write(f"- {name}\n")
 
     print(f"Run outputs: {out_dir}")
 

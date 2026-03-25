@@ -77,6 +77,7 @@ Generate a clustered map + sampled poses (and subsamples + manifest):
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/generate_cluster_map.py \
+  --name clusters4_demo \
   --features-per-cluster 500,800,1200,1500 \
   --bounds -250 250 -250 250 0 10 \
   --pose-resolution 20,20,1 \
@@ -85,11 +86,19 @@ python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/generate_cluster_map.p
   --subsample-prefix 0
 ```
 
-Run Monte Carlo on a specific subsample level (auto-detects manifest + pose file):
+Run Monte Carlo on the base map (auto-detects manifest + pose file):
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
-  --map Map/clusters4_map.csv \
+  --map-name clusters4_demo \
+  --build
+```
+
+Run Monte Carlo on a specific subsample level:
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map-name clusters4_demo \
   --level 3 \
   --build
 ```
@@ -98,7 +107,7 @@ Use the backup manifold implementation:
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
-  --map Map/clusters4_map.csv \
+  --map-name clusters4_demo \
   --level 3 \
   --manifold backup \
   --build
@@ -108,16 +117,40 @@ Plot results (charts saved as PNGs, 3D viewer only on `--show`):
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/plot_monte_carlo_results.py \
-  --run-dir /home/shekoufeh/fov_ws/My_FoV_Optimization/Results/monte_carlo/<timestamp> \
-  --show
+  --run-dir /home/shekoufeh/fov_ws/My_FoV_Optimization/Results/monte_carlo/<timestamp>_<label>
 ```
+
+### Interactive Monte Carlo Viewer (per-iteration quivers)
+
+Launch an interactive GUI where you can:
+- pick a pose (“cluster location”) from the generated pose CSV
+- click **Optimize** to stream per-iteration quivers (red) moving toward the final optimized direction
+- click **Brute Force** to show the brute-force quiver (blue) for that pose
+
+Run (auto-detects the `*_map_manifest.yaml` under `Map/` when only one exists):
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/interactive_monte_carlo_viewer.py
+```
+
+If you have multiple manifests, point to one explicitly:
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/interactive_monte_carlo_viewer.py \
+  --map-manifest /home/shekoufeh/fov_ws/My_FoV_Optimization/Map/<map_folder>/<name>_map_manifest.yaml
+```
+
+Optional flags:
+- `--build` builds `Manifold_cpp/build/manifold_test` before running.
+- `--speed-ms 60` controls animation speed (frame delay).
+- `--max-points 6000` caps rendered map points for faster plotting.
 
 Outputs (CSV + plots) are saved under:
 `Results/monte_carlo/<timestamp>_<label>/data` (raw CSVs)
 `Results/monte_carlo/<timestamp>_<label>/` (plots + analysis)
 
 Pipeline notes:
-- The generator writes `Map/<map>_manifest.yaml`, which includes `pose_map` and subsample paths.
+- The generator writes a manifest next to the map CSV: `<map_csv_stem>_manifest.yaml` (contains `pose_map` and `subsample_maps` when subsampling is enabled).
 - The runner auto-detects the pose file from the map name (or manifest) and caches brute-force results in `Results/monte_carlo/<timestamp>_<label>/bf_cache/` (keyed by map+pose path).
 - The plotter reads `run_info.txt` to locate the correct map and log slice for this run.
 
@@ -146,12 +179,12 @@ python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/generate_cluster_map.p
   --subsample-levels 10
 ```
 
-This writes the map into `Map/` and saves a preview image into `Results/map_preview/`.
-Subsampled maps are written as `0_1_<map>.csv` ... `0_10_<map>.csv`.
-The generator writes a manifest `Map/<map>_manifest.yaml` to keep subsample
-level numbering consistent. Use the manifest with `--map-manifest` and select
-the subsample level with `--level`, or pass `--map` plus `--level` and the
-runner will auto-detect the manifest.
+This saves the base map CSV into `Map/` and a preview image next to it as `<map_csv_stem>_preview.png`.
+Subsampled maps are written next to the base map with filename:
+`<subsample_prefix>_<level>_<base_map_csv_name>` (for example: `0_1_clusters8_map.csv`).
+The generator writes a manifest `<map_csv_stem>_manifest.yaml` next to the base map to keep subsample
+level numbering consistent. Use the manifest with `--map-manifest` and select the subsample
+level with `--level`, or pass `--map` plus `--level` and the runner will auto-detect the manifest.
 
 ### Runner Arguments
 
