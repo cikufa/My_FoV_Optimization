@@ -94,12 +94,46 @@ python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experi
   --build
 ```
 
+Run all subsample levels in one run folder:
+
+```bash
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map-name clusters4_demo \
+  --all-levels \
+  --build
+```
+
 Run Monte Carlo on a specific subsample level:
 
 ```bash
 python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
   --map-name clusters4_demo \
   --level 3 \
+  --build
+```
+
+Choose brute-force objective mode:
+
+```bash
+# Default: both objectives
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map-name clusters4_demo \
+  --all-levels \
+  --bf-objective both \
+  --build
+
+# Feature-count objective only
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map-name clusters4_demo \
+  --all-levels \
+  --bf-objective feat \
+  --build
+
+# Visibility objective only
+python /home/shekoufeh/fov_ws/My_FoV_Optimization/scripts/run_monte_carlo_experiment.py \
+  --map-name clusters4_demo \
+  --all-levels \
+  --bf-objective vis \
   --build
 ```
 
@@ -151,7 +185,8 @@ Outputs (CSV + plots) are saved under:
 
 Pipeline notes:
 - The generator writes a manifest next to the map CSV: `<map_csv_stem>_manifest.yaml` (contains `pose_map` and `subsample_maps` when subsampling is enabled).
-- The runner auto-detects the pose file from the map name (or manifest) and caches brute-force results in `Results/monte_carlo/<timestamp>_<label>/bf_cache/` (keyed by map+pose path).
+- The runner auto-detects the pose file from the map name (or manifest) and caches brute-force results in `Results/monte_carlo/<timestamp>_<label>/bf_cache/` (keyed by map+pose+objective).
+- For `--all-levels`, per-level cache files are stored in the same run cache folder as `0_1_bf_cache.csv`, `0_2_bf_cache.csv`, ..., `0_10_bf_cache.csv`.
 - The plotter reads `run_info.txt` to locate the correct map and log slice for this run.
 
 Performance + cache controls (env vars):
@@ -220,6 +255,12 @@ Inputs:
   Optional label appended to output folder name.
 - `--move`  
   Move outputs into the results folder instead of copying.
+- `--all-levels`  
+  Run all subsample levels from the selected map manifest.
+- `--level`  
+  Run only one subsample level.
+- `--bf-objective`  
+  Brute-force objective mode: `both` (default), `feat`, or `vis`.
 
 ### Inputs to the C++ experiment
 
@@ -257,6 +298,14 @@ Common output files (prefix `0_1_`, `0_2_`, ...):
 - `*_optimizer_avg_time_file.csv`
 - `*_brute_force_avg_time_file.csv`
 - `*_bf_cache.csv` (brute‑force cache, in run-specific `bf_cache/`)
+
+BF cache columns:
+- `ref_x,ref_y,ref_z`
+- `bf_feat_x,bf_feat_y,bf_feat_z`
+- `bf_vis_x,bf_vis_y,bf_vis_z`
+- `bf_time_us`
+- `bf_time_feat_us`
+- `bf_time_vis_us`
 
 
 ### Mapping  (step1)

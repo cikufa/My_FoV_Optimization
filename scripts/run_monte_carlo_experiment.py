@@ -171,16 +171,17 @@ def resolve_map_relative_path(root, user_path):
     return root / "Map" / path
 
 
-def build_bf_cache_signature(map_name, pose_name, grid=None, bounds=None):
+def build_bf_cache_signature(map_name, pose_name, grid=None, bounds=None, bf_objective="both"):
+    bf_objective = (bf_objective or "both").strip().lower()
     if pose_name:
-        return f"map={map_name};pose={pose_name}"
+        return f"map={map_name};pose={pose_name};bf_objective={bf_objective}"
     if grid is None or bounds is None:
-        return f"map={map_name}"
+        return f"map={map_name};bf_objective={bf_objective}"
     x_res, y_res, z_res = grid
     x_low, x_high, y_low, y_high, z_low, z_high = bounds
     return (
         f"map={map_name};grid={x_res},{y_res},{z_res};bounds="
-        f"{x_low},{x_high},{y_low},{y_high},{z_low},{z_high}"
+        f"{x_low},{x_high},{y_low},{y_high},{z_low},{z_high};bf_objective={bf_objective}"
     )
 
 
@@ -202,8 +203,75 @@ def seed_bf_cache(root, signatures, dest_dir):
         dest = dest_dir / path.name
         if not dest.exists():
             shutil.copy2(str(path), str(dest))
+            enrich_cache_with_bf_times(dest, path)
             copied.append(dest)
     return copied
+
+
+def enrich_cache_with_bf_times(cache_dest_path, cache_source_path):
+    """
+    Upgrade legacy BF cache (9 columns) by appending per-pose BF runtime as
+    a 10th column, using sibling data/<prefix>brute_force_avg_time_file.csv.
+    """
+    try:
+        with cache_dest_path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+    if len(lines) < 3:
+        return False
+    col_header = lines[1].strip()
+    if "bf_time_us" in col_header:
+        return False
+
+    data_lines = [ln for ln in lines[2:] if ln.strip() and not ln.lstrip().startswith("#")]
+    if not data_lines:
+        return False
+    pose_count = len(data_lines)
+
+    m = re.match(r"^(.+)_bf_cache\.csv$", cache_source_path.name)
+    if not m:
+        return False
+    prefix = m.group(1) + "_"
+    bf_time_file = cache_source_path.parents[1] / "data" / f"{prefix}brute_force_avg_time_file.csv"
+    if not bf_time_file.exists():
+        return False
+
+    times = []
+    try:
+        with bf_time_file.open("r", encoding="utf-8", errors="ignore") as f:
+            raw = f.readlines()
+        for ln in raw[1:]:
+            txt = ln.replace("\x00", "").strip()
+            if not txt:
+                continue
+            try:
+                times.append(float(txt.split(",")[0]))
+            except ValueError:
+                continue
+    except OSError:
+        return False
+
+    if len(times) < pose_count:
+        return False
+    times = times[:pose_count]
+
+    new_lines = []
+    new_lines.append(lines[0] if lines[0].endswith("\n") else lines[0] + "\n")
+    new_lines.append("# columns: ref_x,ref_y,ref_z,bf_feat_x,bf_feat_y,bf_feat_z,bf_vis_x,bf_vis_y,bf_vis_z,bf_time_us\n")
+    for idx, ln in enumerate(lines[2:]):
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            new_lines.append(ln if ln.endswith("\n") else ln + "\n")
+            continue
+        row = ln.rstrip("\n")
+        new_lines.append(f"{row},{times[idx]:.6f}\n")
+
+    try:
+        with cache_dest_path.open("w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+    except OSError:
+        return False
+    return True
 
 
 def read_cache_signature_line(path):
@@ -212,6 +280,26 @@ def read_cache_signature_line(path):
             return f.readline().strip()
     except OSError:
         return None
+
+
+def warn_if_bf_cache_level_mismatch(cache_path, subsample_prefix, level):
+    """
+    Catch corrupt all-levels saves where e.g. 0_1_bf_cache.csv contains a level-9 signature
+    (seeding then skips level 1 and BF recomputes for every new run).
+    """
+    if level is None:
+        return
+    header = read_cache_signature_line(cache_path)
+    if not header or not header.startswith("# signature:"):
+        return
+    token = f"/{subsample_prefix}_{level}_"
+    if token not in header:
+        print(
+            f"[cache] WARNING: {cache_path.name} signature does not contain map token {token!r}:\n"
+            f"  {header}\n"
+            f"  Fix or delete this file; otherwise seeding will not match this level.",
+            file=sys.stderr,
+        )
 
 
 def patch_grid_resolution(manifold_test_path, grid):
@@ -407,6 +495,47 @@ def main():
         help="Optional label appended to the output folder name.",
     )
     parser.add_argument(
+        "--bf-objective",
+        choices=["both", "feat", "vis"],
+        default="both",
+        help="Brute-force objective mode: both, feature-count only, or visibility only.",
+    )
+    parser.add_argument(
+        "--start-strategy",
+        choices=["single", "multistart", "adaptive"],
+        default="single",
+        help="Starting-direction strategy: keep current single-start behavior, try a few starts, or stop early when progress plateaus.",
+    )
+    parser.add_argument(
+        "--start-count",
+        type=int,
+        default=3,
+        help="Maximum number of ranked start candidates to optimize for multistart/adaptive modes.",
+    )
+    parser.add_argument(
+        "--start-min-rel-gain",
+        type=float,
+        default=0.002,
+        help="Adaptive mode: treat smaller best-score improvements as plateauing progress.",
+    )
+    parser.add_argument(
+        "--start-adaptive-min-starts",
+        type=int,
+        default=2,
+        help="Adaptive mode: minimum number of starts to try before early stopping is allowed.",
+    )
+    parser.add_argument(
+        "--start-adaptive-patience",
+        type=int,
+        default=1,
+        help="Adaptive mode: number of plateaued starts to tolerate before stopping.",
+    )
+    parser.add_argument(
+        "--no-bf-start-seed",
+        action="store_true",
+        help="Do not include the cached brute-force visibility direction as an optimization seed.",
+    )
+    parser.add_argument(
         "--move",
         action="store_true",
         help="Move outputs into run folder instead of copying.",
@@ -418,6 +547,15 @@ def main():
     bin_path = build_dir / "manifold_test"
     data_dir = root / "Data"
     manifold_test_path = root / "Manifold_cpp" / "manifold_test.cpp"
+
+    # Backward/UX-friendly behavior: if the user accidentally passes a map CSV
+    # to --map-manifest, treat it as --map.
+    if args.map_manifest and not args.map:
+        manifest_candidate = Path(args.map_manifest)
+        suffix = manifest_candidate.suffix.lower()
+        if suffix in (".csv", ".txt"):
+            args.map = args.map_manifest
+            args.map_manifest = None
 
     use_backup = args.manifold == "backup"
     cmake_define = "ON" if use_backup else "OFF"
@@ -495,7 +633,14 @@ def main():
             selected_map = base_map
 
         if not selected_map:
-            print("Manifest did not specify a base_map.", file=sys.stderr)
+            hint = ""
+            if manifest_path is not None:
+                hint = (
+                    f"\nHint: --map-manifest must be the YAML manifest (e.g. "
+                    f"'{manifest_path.with_name(manifest_path.stem + '_manifest.yaml').name}' or "
+                    f"'{manifest_path.name}'), not a .csv map file."
+                )
+            print(f"Manifest did not specify a base_map.{hint}", file=sys.stderr)
             sys.exit(2)
         map_path = Path(str(selected_map))
         if not map_path.is_absolute():
@@ -662,6 +807,13 @@ def main():
         level_map_path = resolve_level_map(level)
         map_paths_run.append((level, level_map_path))
 
+        # One folder per subsample level so outputs never overwrite between levels.
+        use_level_layout = level is not None
+        this_out_dir = (out_dir / f"level_{level}") if use_level_layout else out_dir
+        this_bf_cache_dir = bf_cache_dir
+        this_out_dir.mkdir(parents=True, exist_ok=True)
+        this_bf_cache_dir.mkdir(parents=True, exist_ok=True)
+
         map_root = root / "Map"
         try:
             rel_map = level_map_path.relative_to(map_root)
@@ -670,12 +822,13 @@ def main():
             map_name = str(level_map_path)
         map_output = level_map_path.name
 
-        signature = build_bf_cache_signature(map_name, pose_name, grid, bounds)
+        signature = build_bf_cache_signature(map_name, pose_name, grid, bounds, args.bf_objective)
         alt_signature = build_bf_cache_signature(
             str(level_map_path.resolve()),
             str(pose_path.resolve()),
             grid,
             bounds,
+            args.bf_objective,
         )
         signatures = [signature]
         if alt_signature != signature:
@@ -683,52 +836,59 @@ def main():
         for sig in signatures:
             if sig not in signatures_all:
                 signatures_all.append(sig)
-        seeded = seed_bf_cache(root, signatures, bf_cache_dir)
+        seeded = seed_bf_cache(root, signatures, this_bf_cache_dir)
         seeded_all.extend(seeded)
 
-        # The C++ binary reads/writes 0_1_bf_cache.csv as the active cache file.
-        # For all-levels, swap in the current level's cache (if available) and
-        # remove stale mismatched active cache to prevent signature aborts.
+        # C++ Data/ and BF cache use the same level prefix (FOV_MONTE_CARLO_PREFIX, FOV_BF_CACHE_FILE).
         source_prefix = "0_1_"
-        target_prefix = None
-        if args.all_levels and level is not None:
+        if level is not None:
             target_prefix = f"{subsample_prefix}_{level}_"
-        active_cache = bf_cache_dir / f"{source_prefix}bf_cache.csv"
-        if target_prefix and target_prefix != source_prefix:
-            level_cache = bf_cache_dir / f"{target_prefix}bf_cache.csv"
-            if level_cache.exists():
-                shutil.copy2(str(level_cache), str(active_cache))
-                print(f"[cache] level {level}: loaded local cache {level_cache.name} -> {active_cache.name}")
-        elif active_cache.exists():
-            print(f"[cache] level {level if level is not None else 'base'}: using active cache {active_cache.name}")
+        else:
+            target_prefix = None
+        if target_prefix:
+            bf_cache_basename = f"{target_prefix}bf_cache.csv"
+        else:
+            bf_cache_basename = f"{source_prefix}bf_cache.csv"
+        cache_file = this_bf_cache_dir / bf_cache_basename
+
+        if cache_file.exists():
+            print(
+                f"[cache] level {level if level is not None else 'base'}: "
+                f"using {cache_file.relative_to(run_dir)}"
+            )
         if seeded:
             print(f"[cache] level {level if level is not None else 'base'}: seeded {len(seeded)} cache file(s) from prior runs")
-        if active_cache.exists():
-            header = read_cache_signature_line(active_cache)
+        if cache_file.exists():
+            header = read_cache_signature_line(cache_file)
             expected = {f"# signature:{sig}" for sig in signatures}
             if header not in expected:
                 print(
                     f"[cache] level {level if level is not None else 'base'}: "
-                    "removed stale active cache due to signature mismatch"
+                    "removed stale cache due to signature mismatch"
                 )
-                active_cache.unlink()
+                cache_file.unlink()
             else:
                 print(f"[cache] level {level if level is not None else 'base'}: cache signature match")
 
         before = {p: p.stat().st_mtime for p in data_dir.glob("*") if p.is_file()}
         before_lines = {}
-        for name in ["quiversforonepoint.csv"]:
-            path = data_dir / name
-            if path.exists():
-                with path.open("r", encoding="utf-8") as f:
-                    before_lines[name] = sum(1 for _ in f)
-            else:
-                before_lines[name] = 0
+        for path in data_dir.glob("*quiversforonepoint.csv"):
+            with path.open("r", encoding="utf-8") as f:
+                before_lines[path.name] = sum(1 for _ in f)
         start_time = time.time()
 
         env = os.environ.copy()
-        env["FOV_BF_CACHE_DIR"] = str(bf_cache_dir)
+        env["FOV_BF_CACHE_DIR"] = str(this_bf_cache_dir)
+        env["FOV_BF_CACHE_FILE"] = bf_cache_basename
+        env["FOV_MONTE_CARLO_PREFIX"] = target_prefix if target_prefix else source_prefix
+        env["FOV_BF_OBJECTIVE"] = args.bf_objective
         env["FOV_MINIMAL_LOG"] = "1"
+        env["FOV_START_STRATEGY"] = args.start_strategy
+        env["FOV_START_COUNT"] = str(max(1, args.start_count))
+        env["FOV_START_MIN_REL_GAIN"] = str(args.start_min_rel_gain)
+        env["FOV_START_ADAPTIVE_MIN_STARTS"] = str(max(1, args.start_adaptive_min_starts))
+        env["FOV_START_ADAPTIVE_PATIENCE"] = str(max(1, args.start_adaptive_patience))
+        env["FOV_START_INCLUDE_BF_SEED"] = "0" if args.no_bf_start_seed else "1"
         if map_name is not None:
             env["FOV_MAP_PATH"] = map_name
         if map_output is not None:
@@ -736,6 +896,9 @@ def main():
         if bounds is not None:
             env["FOV_BOUNDS"] = ",".join(str(x) for x in bounds)
         run_cmd(cmd, cwd=str(build_dir), env=env)
+
+        if level is not None and cache_file.exists():
+            warn_if_bf_cache_level_mismatch(cache_file, subsample_prefix, level)
 
         changed = []
         for p in data_dir.glob("*"):
@@ -748,45 +911,53 @@ def main():
         source_prefix = "0_1_"
 
         for p in changed:
-            if p.name == "quiversforonepoint.csv" and args.all_levels and target_prefix:
-                dest_name = f"{target_prefix}quiversforonepoint.csv"
-                dest = out_dir / dest_name
+            if p.name.endswith("quiversforonepoint.csv") and use_level_layout:
+                dest_name = "quiversforonepoint.csv"
+                dest = this_out_dir / dest_name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with p.open("r", encoding="utf-8", errors="ignore") as src:
                     lines = src.readlines()
-                tail = lines[before_lines.get("quiversforonepoint.csv", 0):]
+                tail = lines[before_lines.get(p.name, 0):]
                 if tail and any(ch.isalpha() for ch in tail[0]):
                     tail = tail[1:]
                 with dest.open("w", encoding="utf-8") as out_f:
                     out_f.writelines(tail)
-                all_copied.append(dest_name)
+                all_copied.append(str(dest.relative_to(run_dir)))
                 continue
 
-            dest_name = p.name
-            if target_prefix:
-                if dest_name.startswith(source_prefix):
-                    dest_name = target_prefix + dest_name[len(source_prefix):]
-                else:
-                    dest_name = target_prefix + dest_name
-            dest = out_dir / dest_name
+            if use_level_layout:
+                # C++ already prefixes filenames with FOV_MONTE_CARLO_PREFIX (e.g. 0_3_).
+                dest_name = p.name
+            else:
+                dest_name = p.name
+                if target_prefix:
+                    if dest_name.startswith(source_prefix):
+                        dest_name = target_prefix + dest_name[len(source_prefix) :]
+                    else:
+                        dest_name = target_prefix + dest_name
+            dest = this_out_dir / dest_name
             dest.parent.mkdir(parents=True, exist_ok=True)
             if move_outputs:
                 shutil.move(str(p), str(dest))
             else:
                 shutil.copy2(str(p), str(dest))
-            all_copied.append(dest_name)
+            all_copied.append(str(dest.relative_to(run_dir)))
 
-        if target_prefix:
-            cache_src = bf_cache_dir / f"{source_prefix}bf_cache.csv"
-            if cache_src.exists():
-                cache_dest = bf_cache_dir / f"{target_prefix}bf_cache.csv"
-                if cache_src.resolve() == cache_dest.resolve():
-                    continue
-                if cache_dest.exists():
-                    shutil.copy2(str(cache_src), str(cache_dest))
-                    cache_src.unlink()
-                else:
-                    cache_src.rename(cache_dest)
+        if use_level_layout:
+            level_info_path = this_out_dir / "level_info.txt"
+            with level_info_path.open("w", encoding="utf-8") as lf:
+                lf.write(f"level: {level}\n")
+                lf.write(f"map_path: {level_map_path.resolve()}\n")
+                if manifest_path is not None:
+                    lf.write(f"map_manifest: {manifest_path.resolve()}\n")
+                if pose_path is not None:
+                    lf.write(f"pose_path: {pose_path.resolve()}\n")
+                lf.write(f"subsample_prefix: {subsample_prefix}\n")
+                lf.write(f"monte_carlo_csv_prefix: {target_prefix}\n")
+                lf.write(
+                    "plot_outputs_hint: run plot_monte_carlo_results.py --run-dir <this run>; "
+                    "see plots/level_<k>/comparison_visibility.png per level.\n"
+                )
 
     info_path = run_dir / "run_info.txt"
     with info_path.open("w", encoding="utf-8") as f:
@@ -808,6 +979,13 @@ def main():
         if pose_path is not None:
             f.write(f"pose_path: {pose_path}\n")
         f.write(f"bf_cache_dir: {bf_cache_dir}\n")
+        f.write(f"bf_objective: {args.bf_objective}\n")
+        f.write(f"start_strategy: {args.start_strategy}\n")
+        f.write(f"start_count: {max(1, args.start_count)}\n")
+        f.write(f"start_min_rel_gain: {args.start_min_rel_gain}\n")
+        f.write(f"start_adaptive_min_starts: {max(1, args.start_adaptive_min_starts)}\n")
+        f.write(f"start_adaptive_patience: {max(1, args.start_adaptive_patience)}\n")
+        f.write(f"start_include_bf_seed: {str(not args.no_bf_start_seed).lower()}\n")
         if signatures_all:
             if len(signatures_all) == 1:
                 f.write(f"bf_cache_signature: {signatures_all[0]}\n")
@@ -826,6 +1004,12 @@ def main():
         f.write(f"binary: {bin_path}\n")
         f.write(f"data_dir: {data_dir}\n")
         f.write(f"output_dir: {out_dir}\n")
+        if any(lev is not None for lev in levels_to_run):
+            f.write("data_layout: per_level (Monte Carlo CSVs under data/level_<k>/; level_info.txt per folder)\n")
+            f.write(
+                "plots_after_run: python scripts/plot_monte_carlo_results.py --run-dir "
+                f"{run_dir}  -> run-level comparison_*.png + plots/level_<k>/ per subsample\n"
+            )
         prev_lines_val = 0 if args.all_levels else before_lines.get("quiversforonepoint.csv", 0)
         f.write(f"quiversforonepoint_prev_lines: {prev_lines_val}\n")
         f.write("files:\n")

@@ -573,6 +573,18 @@ def main():
     if pose_path:
         print(f"Poses saved: {pose_path}")
 
+    rel_manifest = rel_path(manifest_path)
+    print("\nDownstream (from repo root My_FoV_Optimization/):")
+    print(
+        "  Monte Carlo (one folder per subsample level under Results/.../data/level_<k>/) — "
+        "example:"
+    )
+    print(f"    python scripts/run_monte_carlo_experiment.py --map-manifest {rel_manifest} --all-levels")
+    print(
+        "  Plots — run-level comparison_visibility.png plus per-level plots/level_<k>/comparison_visibility.png:"
+    )
+    print("    python scripts/plot_monte_carlo_results.py --run-dir Results/monte_carlo/<timestamp>_<label>/")
+
 
 if __name__ == "__main__":
     main()
