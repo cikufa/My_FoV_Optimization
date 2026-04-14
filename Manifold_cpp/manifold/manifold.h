@@ -21,6 +21,8 @@
 // #include <Eigen/Dense>
 #include <fstream> 
 #include <sstream>
+#include <limits>
+#include <cstdlib>
 #include <cloud_loader.h>
 
 /*ADDED:*/
@@ -113,35 +115,46 @@ public:
 	    this->brute_force_max_feature_in_FOV=0;
 	    this->brute_force_max_visibility=0.0f;
 		this->print_path=print;
-		const std::string pathfile_path = "path.csv";
-		const std::string pointsfile_path = "points.csv";
-		const std::string quivers_path = "../../Data/quiversforonepoint.csv";
-		const std::string ajl_path = "../../Data/ajl.csv";
-		const std::string error_curve_path = "../../Data/errorcurve.csv";
-		const std::string j_curve_path = "../../Data/Jcurve.csv";
-		const std::string quaternions_path = "../../Data/quaternions.csv";
-		const std::string r_updates_path = "../../Data/Rwhileopt.csv";
+		this->no_io = no_io_enabled();
+		this->bf_coarse_to_fine = fov_env_flag("FOV_BF_COARSE_TO_FINE", false);
+		this->bf_require_global = fov_env_flag("FOV_BF_REQUIRE_GLOBAL", true);
+		this->bf_coarse_stride = fov_env_int("FOV_BF_COARSE_STRIDE", 4, 1, 1000000);
+		this->bf_refine_deg = fov_env_float("FOV_BF_REFINE_DEG", 10.0f, 0.1f, 180.0f);
+		if (this->no_io) {
+			this->print_path = false;
+		}
+		const std::string dp = fov_monte_carlo_data_prefix();
+		const std::string pathfile_path = "../../Data/" + dp + "path.csv";
+		const std::string pointsfile_path = "../../Data/" + dp + "points.csv";
+		const std::string quivers_path = "../../Data/" + dp + "quiversforonepoint.csv";
+		const std::string ajl_path = "../../Data/" + dp + "ajl.csv";
+		const std::string error_curve_path = "../../Data/" + dp + "errorcurve.csv";
+		const std::string j_curve_path = "../../Data/" + dp + "Jcurve.csv";
+		const std::string quaternions_path = "../../Data/" + dp + "quaternions.csv";
+		const std::string r_updates_path = "../../Data/" + dp + "Rwhileopt.csv";
 
-		this->pathfile.open(pathfile_path);
-	    this->pointsfile.open(pointsfile_path);
-/*ADDED:*/
-		this->quiversforonepoint.open(quivers_path, std::ios::app);
+		if (!this->no_io) {
+			this->pathfile.open(pathfile_path);
+		    this->pointsfile.open(pointsfile_path);
+			/*ADDED:*/
+			this->quiversforonepoint.open(quivers_path, std::ios::app);
+			this->ajl.open(ajl_path, std::ios::app);
+			this->error_curve.open(error_curve_path, std::ios::app);
+			this->J_curve.open(j_curve_path, std::ios::app);
+			this->quaternions.open(quaternions_path, std::ios::app);
+			this->R_updates_for_ti.open(r_updates_path, std::ios::app);
+
+			write_header_if_empty(pathfile_path, this->pathfile, "rot_x,rot_y,rot_z");
+			write_header_if_empty(pointsfile_path, this->pointsfile, "x,y,z");
+			write_header_if_empty(quivers_path, this->quiversforonepoint,
+			                      "id,ref_x,ref_y,ref_z,dir_x,dir_y,dir_z,feature_count,degree_between,j_norm,step,visibility");
+			write_header_if_empty(ajl_path, this->ajl, "ajl_x,ajl_y,ajl_z");
+			write_header_if_empty(error_curve_path, this->error_curve, "visibility");
+			write_header_if_empty(j_curve_path, this->J_curve, "j_norm");
+			write_header_if_empty(quaternions_path, this->quaternions, "qw,qx,qy,qz");
+			write_header_if_empty(r_updates_path, this->R_updates_for_ti, "rx,ry,rz");
+		}
 		this->ref_point = ref_point;
-		this->ajl.open(ajl_path, std::ios::app);
-		this->error_curve.open(error_curve_path, std::ios::app);
-		this->J_curve.open(j_curve_path, std::ios::app);
-		this->quaternions.open(quaternions_path, std::ios::app);
-		this->R_updates_for_ti.open(r_updates_path, std::ios::app);
-
-		write_header_if_empty(pathfile_path, this->pathfile, "rot_x,rot_y,rot_z");
-		write_header_if_empty(pointsfile_path, this->pointsfile, "x,y,z");
-		write_header_if_empty(quivers_path, this->quiversforonepoint,
-		                      "id,ref_x,ref_y,ref_z,dir_x,dir_y,dir_z,feature_count,degree_between,j_norm,step,visibility");
-		write_header_if_empty(ajl_path, this->ajl, "ajl_x,ajl_y,ajl_z");
-		write_header_if_empty(error_curve_path, this->error_curve, "visibility");
-		write_header_if_empty(j_curve_path, this->J_curve, "j_norm");
-		write_header_if_empty(quaternions_path, this->quaternions, "qw,qx,qy,qz");
-		write_header_if_empty(r_updates_path, this->R_updates_for_ti, "rx,ry,rz");
 	    this->R= Eigen::AngleAxisf(0.0*M_PI, Eigen::Vector3f::UnitX())
 			  * Eigen::AngleAxisf(0.0*M_PI, Eigen::Vector3f::UnitY())
 			  * Eigen::AngleAxisf(0.0*M_PI, Eigen::Vector3f::UnitZ());
@@ -175,7 +188,9 @@ public:
     		std::ostringstream ss;
 			ss << K__[0]<<","<< K__[1]<<","<< K__[2]<<std::endl;
 			std::string s(ss.str());
-    		this->pointsfile<<s;
+			if (!this->no_io) {
+				this->pointsfile<<s;
+			}
 	    }
 
 	    this->filename=filename_;
@@ -225,6 +240,9 @@ public:
 			}
 			this->use_fov_schedule = true;
 		}
+		bool is_no_io() const {
+			return this->no_io;
+		}
 
 	    Eigen::Matrix3f get_R(void){
 	   		return this->R;
@@ -270,6 +288,21 @@ public:
 			return max_visibility_in_fov;
    	    }
 
+		float ScoreVisibilityDirection(const Eigen::Vector3f& direction) const {
+			if (direction.norm() < 1e-6f) {
+				return 0.0f;
+			}
+			const Eigen::Vector3f unit_direction = direction / direction.norm();
+			float visibility_sum = 0.0f;
+			for (const Eigen::Vector3f& K_ : this->K_list) {
+				const float cos_theta = K_.transpose() * unit_direction;
+				const float visibility =
+				    1.0f / (1.0f + std::exp(-ks * (cos_theta - std::cos(this->visibility_alpha))));
+				visibility_sum += visibility;
+			}
+			return visibility_sum;
+		}
+
 		/*ADDED:*/
 		int get_count_in_fov(){
 			int feature_in_FOV_=0;
@@ -284,27 +317,77 @@ public:
 		
 		/*ADDED:*/
 		void brute_force_search_with_feature_count(void){
-			int count=0;
-			for (Eigen::Vector3f direction:this->loader->get_pointcloud()){
-				count+=1;
-				direction=direction/direction.norm();
-				Eigen::Vector3f Ideal;
-				Ideal<<0.753056,0.657866,0.0108853;
-				Ideal=Ideal/Ideal.norm();
+			const std::vector<Eigen::Vector3f>& directions = this->loader->get_pointcloud();
+			if (directions.empty()) {
+				return;
+			}
 
-				int max_feature_in_FOV=0;
-				
-				for(Eigen::Vector3f K_: this->K_list){
-					if( abs(acos((K_.transpose())*direction))<this->visibility_alpha){
-						max_feature_in_FOV+=1;
+			auto eval_count = [&](const Eigen::Vector3f& direction) -> int {
+				int max_feature_in_FOV = 0;
+				for (Eigen::Vector3f K_ : this->K_list) {
+					if (std::abs(std::acos((K_.transpose()) * direction)) < this->visibility_alpha) {
+						max_feature_in_FOV += 1;
 					}
 				}
-				//std::cout<<"max_feature_in_FOV "<<max_feature_in_FOV<<std::endl;
-				if (max_feature_in_FOV>this->brute_force_max_feature_in_FOV){
-					this->brute_force_max_feature_in_FOV=max_feature_in_FOV;
-					this->brute_force_best_vector_w_feature=direction;
+				return max_feature_in_FOV;
+			};
+
+			int best_count = this->brute_force_max_feature_in_FOV;
+			Eigen::Vector3f best_dir = this->brute_force_best_vector_w_feature;
+			if (best_dir.norm() < 1e-6f) {
+				best_dir = directions.front();
+				if (best_dir.norm() > 1e-6f) {
+					best_dir = best_dir / best_dir.norm();
 				}
-			}		
+			}
+			auto try_update = [&](const Eigen::Vector3f& direction, int count) {
+				if (count > best_count) {
+					best_count = count;
+					best_dir = direction;
+				}
+			};
+
+			if (this->bf_coarse_to_fine) {
+				const int stride = std::max(1, this->bf_coarse_stride);
+				for (size_t i = 0; i < directions.size(); i += static_cast<size_t>(stride)) {
+					Eigen::Vector3f direction = directions[i];
+					if (direction.norm() < 1e-6f) {
+						continue;
+					}
+					direction = direction / direction.norm();
+					try_update(direction, eval_count(direction));
+				}
+
+				if (!this->bf_require_global) {
+					const float cos_refine = std::cos(this->bf_refine_deg * static_cast<float>(M_PI) / 180.0f);
+					for (const Eigen::Vector3f& raw_direction : directions) {
+						Eigen::Vector3f direction = raw_direction;
+						if (direction.norm() < 1e-6f) {
+							continue;
+						}
+						direction = direction / direction.norm();
+						if (direction.dot(best_dir) < cos_refine) {
+							continue;
+						}
+						try_update(direction, eval_count(direction));
+					}
+					this->brute_force_max_feature_in_FOV = best_count;
+					this->brute_force_best_vector_w_feature = best_dir;
+					return;
+				}
+			}
+
+			for (const Eigen::Vector3f& raw_direction : directions) {
+				Eigen::Vector3f direction = raw_direction;
+				if (direction.norm() < 1e-6f) {
+					continue;
+				}
+				direction = direction / direction.norm();
+				try_update(direction, eval_count(direction));
+			}
+
+			this->brute_force_max_feature_in_FOV = best_count;
+			this->brute_force_best_vector_w_feature = best_dir;
 			return;
 
 			// NOTE:NOTE: commentedddddddddddddddddddddd
@@ -336,27 +419,87 @@ public:
    		
 	   /*ADDED:*/
 	    void brute_force_search_with_visibility(void){
-			for (Eigen::Vector3f direction:this->loader->get_pointcloud()){
-				direction=direction/direction.norm();
+			const std::vector<Eigen::Vector3f>& directions = this->loader->get_pointcloud();
+			if (directions.empty()) {
+				return;
+			}
+
+			auto eval_visibility = [&](const Eigen::Vector3f& direction) -> float {
 				float max_visibility_in_fov = 0.0f;
-				for(Eigen::Vector3f K_: this->K_list){
+				for (Eigen::Vector3f K_ : this->K_list) {
 					float cos_theta = K_.transpose() * direction;
 					float visibility = 1.0f / (1.0f + std::exp(-ks * (cos_theta - std::cos(this->visibility_alpha))));
-					max_visibility_in_fov +=  visibility;
-				} 
-				//std::cout<<"max_feature_in_FOV "<<max_feature_in_FOV<<std::endl;
-				if (max_visibility_in_fov>this->brute_force_max_visibility){
-					this->brute_force_max_visibility = max_visibility_in_fov;
-					this->brute_force_best_vector_w_vis=direction;
+					max_visibility_in_fov += visibility;
 				}
-			}	
-			optimized_max_vis= get_optimized_max_visibility();
-			// std::cout<<"this->brute_force_max_visibility "<<this->brute_force_max_visibility<<std::endl;
-			// std::cout<<" optimized_max_vis "<<this-> optimized_max_vis<<std::endl;
-			if(optimized_max_vis > this->brute_force_max_visibility){
+				return max_visibility_in_fov;
+			};
+
+			float best_visibility = this->brute_force_max_visibility;
+			Eigen::Vector3f best_dir = this->brute_force_best_vector_w_vis;
+			if (best_dir.norm() < 1e-6f) {
+				best_dir = directions.front();
+				if (best_dir.norm() > 1e-6f) {
+					best_dir = best_dir / best_dir.norm();
+				}
+			}
+			auto try_update = [&](const Eigen::Vector3f& direction, float score) {
+				if (score > best_visibility) {
+					best_visibility = score;
+					best_dir = direction;
+				}
+			};
+
+			if (this->bf_coarse_to_fine) {
+				const int stride = std::max(1, this->bf_coarse_stride);
+				for (size_t i = 0; i < directions.size(); i += static_cast<size_t>(stride)) {
+					Eigen::Vector3f direction = directions[i];
+					if (direction.norm() < 1e-6f) {
+						continue;
+					}
+					direction = direction / direction.norm();
+					try_update(direction, eval_visibility(direction));
+				}
+
+				if (!this->bf_require_global) {
+					const float cos_refine = std::cos(this->bf_refine_deg * static_cast<float>(M_PI) / 180.0f);
+					for (const Eigen::Vector3f& raw_direction : directions) {
+						Eigen::Vector3f direction = raw_direction;
+						if (direction.norm() < 1e-6f) {
+							continue;
+						}
+						direction = direction / direction.norm();
+						if (direction.dot(best_dir) < cos_refine) {
+							continue;
+						}
+						try_update(direction, eval_visibility(direction));
+					}
+					this->brute_force_max_visibility = best_visibility;
+					this->brute_force_best_vector_w_vis = best_dir;
+					optimized_max_vis = get_optimized_max_visibility();
+					if (optimized_max_vis > this->brute_force_max_visibility) {
+						this->brute_force_max_visibility = optimized_max_vis;
+						this->brute_force_best_vector_w_vis = this->R * this->c;
+					}
+					return;
+				}
+			}
+
+			for (const Eigen::Vector3f& raw_direction : directions) {
+				Eigen::Vector3f direction = raw_direction;
+				if (direction.norm() < 1e-6f) {
+					continue;
+				}
+				direction = direction / direction.norm();
+				try_update(direction, eval_visibility(direction));
+			}
+
+			this->brute_force_max_visibility = best_visibility;
+			this->brute_force_best_vector_w_vis = best_dir;
+			optimized_max_vis = get_optimized_max_visibility();
+			if (optimized_max_vis > this->brute_force_max_visibility) {
 				this->brute_force_max_visibility = optimized_max_vis;
-				this->brute_force_best_vector_w_vis= this->R * this->c;
-			}	
+				this->brute_force_best_vector_w_vis = this->R * this->c;
+			}
 			return;
 		}
 
@@ -370,36 +513,32 @@ public:
 	   }
 
 		int optimize(Eigen::Vector3f brute_force) {
-			/*ADDED:*/
-			int redo =0;
-			std::vector<float> visibility_history;
-			float max_visibility = 10.0f;
-			const int history_window = 3;
-			int perturb_after= 3; 
-			float initial_J_norm = 0;
-			float J_thresh;
-			float vis_thresh= this->K_list.size() * (this->visibility_alpha*2/360); //vis of fov if landmarks distributed equally;
+			int redo = 0;
+			const float points_count =
+				std::max(1.0f, static_cast<float>(this->K_list.size()));
+			const float inv_points = 1.0f / points_count;
+			const float max_step_rad = this->max_step_rad;
+			const float rel_tol = 1e-4f;
+			const float grad_tol = 1e-4f;
+			const int patience = 3;
+			int no_improve_count = 0;
 
 			float degree_between;
 			int feature_count;
-			Eigen::Vector3f velocity = Eigen::Vector3f::Zero();
-			float momentum = 0.0;
-			float step, v, w, coeff;
-			// float initial_step = 0.001;
-			float initial_step = (1/(this->K_list.size()*M_PI));;
-
-
-			float decay_rate = 0.01;  // Adjust this decay rate for tuning
-			float total_feature_count = 0;
-			float mean_feature_count= 0;
-			float max_feature_count=0;
-			int zero_j_count = 0;
+			float step = 0.0f;
+			float v = 0.0f;
+			float w = 0.0f;
+			float coeff = 0.0f;
+			float prev_visibility = std::numeric_limits<float>::quiet_NaN();
+			const bool log_io = !this->no_io;
 			// std::cout<<"starting c"<<this->c<<std::endl;
 			for (int i = 0; i < this->max_iteration; i++) {
 				Eigen::Vector3f aJ_l;
 				aJ_l << 0, 0, 0;
 				float residual = 0.0;
-				float current_visibility=0.0;
+				float current_visibility = 0.0f;
+				const float visibility_alpha = GetVisibilityAlpha(i);
+				const float cos_alpha = std::cos(visibility_alpha);
 				//++++++++++++++++++++++++++++++++++++++++++++++++   iterating on landmarks  ++++++++++++++++++++++++++++++++++++++++++++++++
 				for (Eigen::Vector3f K_ : this->K_list) {
 					Eigen::Vector3f K = (K_.transpose())* this->R; 
@@ -424,41 +563,32 @@ public:
 						u = (K_.transpose()) * (this->R) * this->c;  
 						KTRC = u;
 						residual = residual + KTRC;
-						const float visibility_alpha = GetVisibilityAlpha(i);
-						const float cos_alpha = std::cos(visibility_alpha);
 						const float ks_iter = static_cast<float>(GetKsForIteration(i));
 
 						w = (-1.0f) * ks_iter * (u - cos_alpha); 
 						v = exp(w);
 						coeff = (-1.0f) * (pow((1 + v), (-2)) * v * (0.0f - ks_iter)); 
 						F_Jacobian = coeff * J; 
+						current_visibility += 1.0f / (1.0f + v);
+					} else {
+						const float u = (K_.transpose()) * (this->R) * this->c;
+						current_visibility += (u >= cos_alpha) ? 1.0f : 0.0f;
 					}
 					Eigen::Vector3f aJ = F_Jacobian;
 					aJ_l = aJ_l + aJ;
-					/*ADDED:error ( visibility)*/
-					current_visibility += 1.0/(1.0+v);
 				} 
 				//++++++++++++++++++++++++++++++++++++++++++++++++++  Done iterating on landmarks ++++++++++++++++++++++++++++++++++++++++++++++++
 
-				/*ADDED:error (visibility)*/
-				visibility_history.push_back(current_visibility);
-				if (current_visibility > max_visibility) {
-					max_visibility = current_visibility;
-				}
-				if (visibility_history.size() > history_window) {
-					visibility_history.erase(visibility_history.begin()); 
-				}
+				aJ_l *= inv_points;
+				current_visibility *= inv_points;
 
 				const float jacobian_norm = aJ_l.norm();
 				if (jacobian_norm > 1e-9f) {
-					step = initial_step;
+					step = 1.0f;
 					if (this->step_clamp_enabled) {
 						float delta_norm = step * jacobian_norm;
-						if (delta_norm < this->min_step_rad) {
-							step = this->min_step_rad / jacobian_norm;
-						}
-						if (delta_norm > this->max_step_rad) {
-							step = this->max_step_rad / jacobian_norm;
+						if (delta_norm > max_step_rad) {
+							step = max_step_rad / jacobian_norm;
 						}
 					}
 				} else {
@@ -467,52 +597,33 @@ public:
 
 				// std::cout<<aJ_l<<std::endl;
 				/*______________________________________________________________________________________-logging_________________*/
-				this->ajl << aJ_l << std::endl;
-				feature_count = this->get_count_in_fov();
-				degree_between = acos(brute_force.transpose() * rotated_vec) * 180.0 / M_PI;
-				
-				this->quiversforonepoint << this->cnt << "," << std::to_string(this->ref_point[0]) << "," 
-										 << std::to_string(this->ref_point[1]) << "," << std::to_string(this->ref_point[2]) << ","
-										 << std::to_string(this->rotated_vec[0]) << "," << std::to_string(this->rotated_vec[1]) << "," 
-										 << std::to_string(this->rotated_vec[2]) << "," << feature_count << "," << degree_between << ","
-										 << jacobian_norm << ","<< step <<"," << current_visibility<< std::endl;
-
-
-					/*______________________________________________________________________________________-perturb if needed __________________*/
-
-				/*NOTE: desice to ocontinue optimization at t with starting_c1 or break and start with starting_c2 */
-				if (i==0){
-					initial_J_norm = aJ_l.norm();
+				if (log_io) {
+					this->ajl << aJ_l << std::endl;
+					feature_count = this->get_count_in_fov();
+					degree_between = acos(brute_force.transpose() * rotated_vec) * 180.0 / M_PI;
+					this->quiversforonepoint << this->cnt << "," << std::to_string(this->ref_point[0]) << "," 
+											 << std::to_string(this->ref_point[1]) << "," << std::to_string(this->ref_point[2]) << ","
+											 << std::to_string(this->rotated_vec[0]) << "," << std::to_string(this->rotated_vec[1]) << "," 
+											 << std::to_string(this->rotated_vec[2]) << "," << feature_count << "," << degree_between << ","
+											 << jacobian_norm << ","<< step <<"," << current_visibility<< std::endl;
 				}
-				float a= 0.1f * initial_J_norm;
-				float b= float(this->K_list.size() * (this->visibility_alpha*2/360));
-				J_thresh = std::max(a,b); 
-				// if (i==0){
-				// 	std::cout<<"A:  "<<a<<"  b: "<<b<<std::endl;
-				// }
-				// std::cout<<"aj norm:  "<<aJ_l.norm()<<std::endl;
-				//ADDED: count iterations with low j
-				if (aJ_l.norm() < J_thresh) {
-					zero_j_count++;  
-				} else {     
-					zero_j_count = 0;  
-				}
-				if (zero_j_count > perturb_after) {
-					zero_j_count = 0;  
-					float avg_recent_visibility = std::accumulate(visibility_history.begin(), visibility_history.end(), 0.0f) / visibility_history.size();
-					std::cout<<"avg recent visibility "<< avg_recent_visibility<<"  , max visibility  "<<max_visibility<<std::endl;
-					if (avg_recent_visibility < vis_thresh) {
-						std::cout<<"not going well. go change start c and start over."<<std::endl;
-						redo=1;
-						break;
 
-					} else{
-						redo=0;
-						std::cout<<"jacobian zero for some time but vis not less than thresh so optimal -> break"<<std::endl;
-						break;
+
+				if (std::isfinite(prev_visibility)) {
+					const float denom =
+						std::max(1.0f, std::abs(prev_visibility));
+					const float rel_improve =
+						std::abs(current_visibility - prev_visibility) / denom;
+					if (rel_improve < rel_tol || jacobian_norm < grad_tol) {
+						no_improve_count++;
+					} else {
+						no_improve_count = 0;
 					}
 				}
-				// std::cout<<"j threshold"<<J_thresh<<std::endl;
+				prev_visibility = current_visibility;
+				if (no_improve_count >= patience) {
+					break;
+				}
 
 /*___________________________________________ ________________________________________-update R__________________*/
 				const Eigen::Vector3f delta_body = step * aJ_l;
@@ -524,15 +635,19 @@ public:
 /*_____________________________________________________________________________________-logging_________________*/
 
 				// this->quaternions<<quat.w()<< "," << quat.x() << ","<< quat.y() << "," << quat.z() << std::endl;
-				this->R_updates_for_ti << this->R * this->c << std::endl;
-				if (this->print_path == true) {
-					this->pathfile << std::to_string(rotated_vec[0]) << "," << std::to_string(rotated_vec[1]) << "," 
-								   << std::to_string(rotated_vec[2]) << std::endl;
+				if (log_io) {
+					this->R_updates_for_ti << this->R * this->c << std::endl;
+					if (this->print_path == true) {
+						this->pathfile << std::to_string(rotated_vec[0]) << "," << std::to_string(rotated_vec[1]) << "," 
+									   << std::to_string(rotated_vec[2]) << std::endl;
+					}
 				}
 			}
 		
-			this->R_updates_for_ti << "\n\n";
-			this->ajl << "\n\n";
+			if (log_io) {
+				this->R_updates_for_ti << "\n\n";
+				this->ajl << "\n\n";
+			}
 			return redo;
 		}
 
@@ -544,35 +659,26 @@ public:
 			}
 
 			int redo = 0;
-			std::vector<float> visibility_history;
-			float max_visibility = 10.0f;
-			const int history_window = 3;
-			int perturb_after = 3;
-			float initial_J_norm = 0.0f;
-			float J_thresh = 0.0f;
-			float vis_thresh =
-				static_cast<float>(this->K_list.size()) * (this->visibility_alpha * 2.0f / 360.0f);
-
 			const float points_count =
 				std::max(1.0f, static_cast<float>(this->K_list.size()));
+			const float inv_points = 1.0f / points_count;
+			const float rel_tol = 1e-4f;
+			const float grad_tol = 1e-4f;
+			const int patience = 3;
+			int no_improve_count = 0;
 			float prev_avg_jac_norm = 1.0f;
 			float adaptive_step_scale = 1.0f;
 			const bool step_norm_jacobian = false;  // match kStepNormPoints
 			const bool adaptive_step_enabled = true;
 			const float base_step_scale = 1.0f;
-			const float min_step_rad = 0.25f * static_cast<float>(M_PI) / 180.0f;
-			const float max_step_rad = 5.0f * static_cast<float>(M_PI) / 180.0f;
-			const float min_step_decay_strength = 1.0f;
+			const float max_step_rad = this->max_step_rad;
 			const float max_step_decay_strength = 0.5f;
 			const float adapt_max_clip_thresh = 0.35f;
-			const float adapt_min_clip_thresh = 0.80f;
 			const float adapt_low_max_clip_thresh = 0.05f;
-			const float adapt_low_min_clip_thresh = 0.20f;
 			const float adapt_shrink_factor = 0.70f;
-			const float adapt_grow_high_min_factor = 1.15f;
-			const float adapt_grow_low_clip_factor = 1.05f;
 			const float adapt_scale_min = 0.10f;
 			const float adapt_scale_max = 10.0f;
+			const bool log_io = !this->no_io;
 
 			const float alpha_260 = 260.0f * static_cast<float>(M_PI) / 180.0f;
 			const float schedule_rad[] = {
@@ -589,7 +695,7 @@ public:
 			float v = 0.0f;
 			float w = 0.0f;
 			float coeff = 0.0f;
-			int zero_j_count = 0;
+			float prev_visibility = std::numeric_limits<float>::quiet_NaN();
 
 			for (int i = 0; i < this->max_iteration; i++) {
 				Eigen::Vector3f aJ_l;
@@ -653,74 +759,26 @@ public:
 					aJ_l = aJ_l + F_Jacobian;
 				}
 
-				visibility_history.push_back(current_visibility);
-				if (current_visibility > max_visibility) {
-					max_visibility = current_visibility;
-				}
-				if (visibility_history.size() > static_cast<size_t>(history_window)) {
-					visibility_history.erase(visibility_history.begin());
-				}
-
-				if (i == 0) {
-					initial_J_norm = aJ_l.norm();
-				}
-				float a = 0.1f * initial_J_norm;
-				float b =
-					static_cast<float>(this->K_list.size()) *
-					(this->visibility_alpha * 2.0f / 360.0f);
-				J_thresh = std::max(a, b);
-				if (aJ_l.norm() < J_thresh) {
-					zero_j_count++;
-				} else {
-					zero_j_count = 0;
-				}
-				if (zero_j_count > perturb_after) {
-					zero_j_count = 0;
-					float avg_recent_visibility =
-						std::accumulate(visibility_history.begin(),
-						                visibility_history.end(), 0.0f) /
-						static_cast<float>(visibility_history.size());
-					std::cout << "avg recent visibility " << avg_recent_visibility
-					          << "  , max visibility  " << max_visibility << std::endl;
-					if (avg_recent_visibility < vis_thresh) {
-						std::cout << "not going well. go change start c and start over." << std::endl;
-						redo = 1;
-						break;
-					} else {
-						redo = 0;
-						std::cout
-							<< "jacobian zero for some time but vis not less than thresh so optimal -> break"
-							<< std::endl;
-						break;
-					}
-				}
+				aJ_l *= inv_points;
+				current_visibility *= inv_points;
 
 				const float jacobian_norm = aJ_l.norm();
 				const float iter_ratio =
 					static_cast<float>(i) / std::max(1, this->max_iteration - 1);
-				const float min_step_iter =
-					std::max(0.0f,
-					         min_step_rad * (1.0f - min_step_decay_strength * iter_ratio));
 				const float max_step_iter =
-					std::max(min_step_iter,
-					         max_step_rad * (1.0f - max_step_decay_strength * iter_ratio));
+					std::max(0.0f, max_step_rad * (1.0f - max_step_decay_strength * iter_ratio));
 				const float norm_scale =
 					step_norm_jacobian
 						? std::max(1e-6f, prev_avg_jac_norm)
-						: points_count;
+						: 1.0f;
 
 				float base_step = 0.0f;
 				float target_delta_norm = 0.0f;
-				bool clipped_min = false;
 				bool clipped_max = false;
 				if (jacobian_norm > 1e-9f) {
 					base_step = (adaptive_step_scale * base_step_scale) / norm_scale;
 					target_delta_norm = base_step * jacobian_norm;
 					if (this->step_clamp_enabled) {
-						if (target_delta_norm < min_step_iter) {
-							target_delta_norm = min_step_iter;
-							clipped_min = true;
-						}
 						if (target_delta_norm > max_step_iter) {
 							target_delta_norm = max_step_iter;
 							clipped_max = true;
@@ -737,26 +795,28 @@ public:
 
 				this->rotated_vec = this->R * this->c;
 
-				this->ajl << aJ_l << std::endl;
-				feature_count = this->get_count_in_fov();
-				degree_between =
-					acos(brute_force.transpose() * rotated_vec) * 180.0f / M_PI;
-				this->quiversforonepoint << this->cnt << ","
-				                         << std::to_string(this->ref_point[0]) << ","
-				                         << std::to_string(this->ref_point[1]) << ","
-				                         << std::to_string(this->ref_point[2]) << ","
-				                         << std::to_string(this->rotated_vec[0]) << ","
-				                         << std::to_string(this->rotated_vec[1]) << ","
-				                         << std::to_string(this->rotated_vec[2]) << ","
-				                         << feature_count << "," << degree_between << ","
-				                         << aJ_l.norm() << "," << step << ","
-				                         << current_visibility << std::endl;
+				if (log_io) {
+					this->ajl << aJ_l << std::endl;
+					feature_count = this->get_count_in_fov();
+					degree_between =
+						acos(brute_force.transpose() * rotated_vec) * 180.0f / M_PI;
+					this->quiversforonepoint << this->cnt << ","
+					                         << std::to_string(this->ref_point[0]) << ","
+					                         << std::to_string(this->ref_point[1]) << ","
+					                         << std::to_string(this->ref_point[2]) << ","
+					                         << std::to_string(this->rotated_vec[0]) << ","
+					                         << std::to_string(this->rotated_vec[1]) << ","
+					                         << std::to_string(this->rotated_vec[2]) << ","
+					                         << feature_count << "," << degree_between << ","
+					                         << aJ_l.norm() << "," << step << ","
+					                         << current_visibility << std::endl;
 
-				this->R_updates_for_ti << this->R * this->c << std::endl;
-				if (this->print_path == true) {
-					this->pathfile << std::to_string(rotated_vec[0]) << ","
-					               << std::to_string(rotated_vec[1]) << ","
-					               << std::to_string(rotated_vec[2]) << std::endl;
+					this->R_updates_for_ti << this->R * this->c << std::endl;
+					if (this->print_path == true) {
+						this->pathfile << std::to_string(rotated_vec[0]) << ","
+						               << std::to_string(rotated_vec[1]) << ","
+						               << std::to_string(rotated_vec[2]) << std::endl;
+					}
 				}
 
 				if (step_norm_jacobian && jacobian_norm > 1e-9f) {
@@ -764,31 +824,46 @@ public:
 				}
 
 				if (adaptive_step_enabled && jacobian_norm > 1e-9f) {
-					const float min_clip_ratio = clipped_min ? 1.0f : 0.0f;
 					const float max_clip_ratio = clipped_max ? 1.0f : 0.0f;
 					if (max_clip_ratio > adapt_max_clip_thresh) {
 						adaptive_step_scale = std::max(
 							adapt_scale_min, adaptive_step_scale * adapt_shrink_factor);
-					} else if (min_clip_ratio > adapt_min_clip_thresh) {
+					} else if (max_clip_ratio < adapt_low_max_clip_thresh) {
 						adaptive_step_scale = std::min(
 							adapt_scale_max,
-							adaptive_step_scale * adapt_grow_high_min_factor);
-					} else if (max_clip_ratio < adapt_low_max_clip_thresh &&
-					           min_clip_ratio < adapt_low_min_clip_thresh) {
-						adaptive_step_scale = std::min(
-							adapt_scale_max,
-							adaptive_step_scale * adapt_grow_low_clip_factor);
+							adaptive_step_scale * 1.05f);
 					}
+				}
+
+				if (std::isfinite(prev_visibility)) {
+					const float denom =
+						std::max(1.0f, std::abs(prev_visibility));
+					const float rel_improve =
+						std::abs(current_visibility - prev_visibility) / denom;
+					if (rel_improve < rel_tol || jacobian_norm < grad_tol) {
+						no_improve_count++;
+					} else {
+						no_improve_count = 0;
+					}
+				}
+				prev_visibility = current_visibility;
+				if (no_improve_count >= patience) {
+					break;
 				}
 			}
 
-			this->R_updates_for_ti << "\n\n";
-			this->ajl << "\n\n";
+			if (log_io) {
+				this->R_updates_for_ti << "\n\n";
+				this->ajl << "\n\n";
+			}
 			return redo;
 		}
 		
 		/*ADDED: for steepest desent visual*/
 		void calculate_error_all_direction_for_each_t() {
+			if (this->no_io) {
+				return;
+			}
 			float error = 0.0f;
 			for(Eigen::Vector3f direction:this->loader->get_pointcloud()){	
 				direction=direction/direction.norm();
@@ -829,6 +904,9 @@ public:
 		}	
 
 		void calculate_J_all_direction_for_each_t() {
+			if (this->no_io) {
+				return;
+			}
 			for(Eigen::Vector3f direction:this->loader->get_pointcloud()){	
 				Eigen::Vector3f aJ_l;
 				aJ_l << 0, 0, 0;
@@ -878,7 +956,7 @@ private:
 		bool optimize_visibility_sigmoid;
 		std::string filename;
 		double ks=15;
-		float visibility_angle=45.0;
+			float visibility_angle=15.0;
 		double visibility_alpha=visibility_angle*M_PI/180.0;
 		double visibility_alpha_180=179.0*M_PI/180.0;
 		double visibility_alpha_120=120.0*M_PI/180.0;
@@ -908,6 +986,11 @@ private:
 		std::ofstream quaternions;
 		std::ofstream R_updates_for_ti;
 		bool print_path;
+		bool no_io = false;
+		bool bf_coarse_to_fine = false;
+		bool bf_require_global = true;
+		int bf_coarse_stride = 4;
+		float bf_refine_deg = 10.0f;
 		CloudLoader *loader;
 		CloudLoader *loaderrot;
 		int brute_force_max_feature_in_FOV;

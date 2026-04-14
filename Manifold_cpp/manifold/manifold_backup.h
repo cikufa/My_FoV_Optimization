@@ -18,6 +18,7 @@
 // #include <Eigen/Dense>
 #include <fstream> 
 #include <sstream>
+#include <cstdlib>
 #include <cloud_loader.h>
 
 /*ADDED:*/
@@ -105,35 +106,42 @@ public:
 	    this->brute_force_max_feature_in_FOV=0;
 	    this->brute_force_max_visibility=0.0f;
 		this->print_path=print;
-		const std::string pathfile_path = "path.csv";
-		const std::string pointsfile_path = "points.csv";
-		const std::string quivers_path = "../../Data/quiversforonepoint.csv";
-		const std::string ajl_path = "../../Data/ajl.csv";
-		const std::string error_curve_path = "../../Data/errorcurve.csv";
-		const std::string j_curve_path = "../../Data/Jcurve.csv";
-		const std::string quaternions_path = "../../Data/quaternions.csv";
-		const std::string r_updates_path = "../../Data/Rwhileopt.csv";
+		this->no_io = no_io_enabled();
+		if (this->no_io) {
+			this->print_path = false;
+		}
+		const std::string dp = fov_monte_carlo_data_prefix();
+		const std::string pathfile_path = "../../Data/" + dp + "path.csv";
+		const std::string pointsfile_path = "../../Data/" + dp + "points.csv";
+		const std::string quivers_path = "../../Data/" + dp + "quiversforonepoint.csv";
+		const std::string ajl_path = "../../Data/" + dp + "ajl.csv";
+		const std::string error_curve_path = "../../Data/" + dp + "errorcurve.csv";
+		const std::string j_curve_path = "../../Data/" + dp + "Jcurve.csv";
+		const std::string quaternions_path = "../../Data/" + dp + "quaternions.csv";
+		const std::string r_updates_path = "../../Data/" + dp + "Rwhileopt.csv";
 
-		this->pathfile.open(pathfile_path);
-	    this->pointsfile.open(pointsfile_path);
-/*ADDED:*/
-		this->quiversforonepoint.open(quivers_path, std::ios::app);
+		if (!this->no_io) {
+			this->pathfile.open(pathfile_path);
+		    this->pointsfile.open(pointsfile_path);
+			/*ADDED:*/
+			this->quiversforonepoint.open(quivers_path, std::ios::app);
+			this->ajl.open(ajl_path, std::ios::app);
+			this->error_curve.open(error_curve_path, std::ios::app);
+			this->J_curve.open(j_curve_path, std::ios::app);
+			this->quaternions.open(quaternions_path, std::ios::app);
+			this->R_updates_for_ti.open(r_updates_path, std::ios::app);
+
+			write_header_if_empty(pathfile_path, this->pathfile, "rot_x,rot_y,rot_z");
+			write_header_if_empty(pointsfile_path, this->pointsfile, "x,y,z");
+			write_header_if_empty(quivers_path, this->quiversforonepoint,
+			                      "id,ref_x,ref_y,ref_z,dir_x,dir_y,dir_z,feature_count,degree_between,j_norm,step,visibility");
+			write_header_if_empty(ajl_path, this->ajl, "ajl_x,ajl_y,ajl_z");
+			write_header_if_empty(error_curve_path, this->error_curve, "visibility");
+			write_header_if_empty(j_curve_path, this->J_curve, "j_norm");
+			write_header_if_empty(quaternions_path, this->quaternions, "qw,qx,qy,qz");
+			write_header_if_empty(r_updates_path, this->R_updates_for_ti, "rx,ry,rz");
+		}
 		this->ref_point = ref_point;
-		this->ajl.open(ajl_path, std::ios::app);
-		this->error_curve.open(error_curve_path, std::ios::app);
-		this->J_curve.open(j_curve_path, std::ios::app);
-		this->quaternions.open(quaternions_path, std::ios::app);
-		this->R_updates_for_ti.open(r_updates_path, std::ios::app);
-
-		write_header_if_empty(pathfile_path, this->pathfile, "rot_x,rot_y,rot_z");
-		write_header_if_empty(pointsfile_path, this->pointsfile, "x,y,z");
-		write_header_if_empty(quivers_path, this->quiversforonepoint,
-		                      "id,ref_x,ref_y,ref_z,dir_x,dir_y,dir_z,feature_count,degree_between,j_norm,step,visibility");
-		write_header_if_empty(ajl_path, this->ajl, "ajl_x,ajl_y,ajl_z");
-		write_header_if_empty(error_curve_path, this->error_curve, "visibility");
-		write_header_if_empty(j_curve_path, this->J_curve, "j_norm");
-		write_header_if_empty(quaternions_path, this->quaternions, "qw,qx,qy,qz");
-		write_header_if_empty(r_updates_path, this->R_updates_for_ti, "rx,ry,rz");
 	    this->R= Eigen::AngleAxisf(0.0*M_PI, Eigen::Vector3f::UnitX())
 			  * Eigen::AngleAxisf(0.0*M_PI, Eigen::Vector3f::UnitY())
 			  * Eigen::AngleAxisf(0.0*M_PI, Eigen::Vector3f::UnitZ());
@@ -167,7 +175,9 @@ public:
     		std::ostringstream ss;
 			ss << K__[0]<<","<< K__[1]<<","<< K__[2]<<std::endl;
 			std::string s(ss.str());
-    		this->pointsfile<<s;
+			if (!this->no_io) {
+				this->pointsfile<<s;
+			}
 	    }
 
 	    this->filename=filename_;
@@ -428,15 +438,17 @@ public:
 
 				// std::cout<<aJ_l<<std::endl;
 				/*______________________________________________________________________________________-logging_________________*/
-				this->ajl << aJ_l << std::endl;
-				feature_count = this->get_count_in_fov();
-				degree_between = acos(brute_force.transpose() * rotated_vec) * 180.0 / M_PI;
-				
-				this->quiversforonepoint << this->cnt << "," << std::to_string(this->ref_point[0]) << "," 
-										 << std::to_string(this->ref_point[1]) << "," << std::to_string(this->ref_point[2]) << ","
-										 << std::to_string(this->rotated_vec[0]) << "," << std::to_string(this->rotated_vec[1]) << "," 
-										 << std::to_string(this->rotated_vec[2]) << "," << feature_count << "," << degree_between << ","
-										 << aJ_l.norm() << ","<< step <<"," << current_visibility<< std::endl;
+				if (!this->no_io) {
+					this->ajl << aJ_l << std::endl;
+					feature_count = this->get_count_in_fov();
+					degree_between = acos(brute_force.transpose() * rotated_vec) * 180.0 / M_PI;
+					
+					this->quiversforonepoint << this->cnt << "," << std::to_string(this->ref_point[0]) << "," 
+											 << std::to_string(this->ref_point[1]) << "," << std::to_string(this->ref_point[2]) << ","
+											 << std::to_string(this->rotated_vec[0]) << "," << std::to_string(this->rotated_vec[1]) << "," 
+											 << std::to_string(this->rotated_vec[2]) << "," << feature_count << "," << degree_between << ","
+											 << aJ_l.norm() << ","<< step <<"," << current_visibility<< std::endl;
+				}
 
 
 					/*______________________________________________________________________________________-perturb if needed __________________*/
@@ -484,15 +496,19 @@ public:
 /*_____________________________________________________________________________________-logging_________________*/
 
 				// this->quaternions<<quat.w()<< "," << quat.x() << ","<< quat.y() << "," << quat.z() << std::endl;
-				this->R_updates_for_ti << this->R * this->c << std::endl;
-				if (this->print_path == true) {
-					this->pathfile << std::to_string(rotated_vec[0]) << "," << std::to_string(rotated_vec[1]) << "," 
-								   << std::to_string(rotated_vec[2]) << std::endl;
+				if (!this->no_io) {
+					this->R_updates_for_ti << this->R * this->c << std::endl;
+					if (this->print_path == true) {
+						this->pathfile << std::to_string(rotated_vec[0]) << "," << std::to_string(rotated_vec[1]) << "," 
+									   << std::to_string(rotated_vec[2]) << std::endl;
+					}
 				}
 			}
 		
-			this->R_updates_for_ti << "\n\n";
-			this->ajl << "\n\n";
+			if (!this->no_io) {
+				this->R_updates_for_ti << "\n\n";
+				this->ajl << "\n\n";
+			}
 			return redo;
 		}
 
@@ -675,26 +691,28 @@ public:
 
 				this->rotated_vec = this->R * this->c;
 
-				this->ajl << aJ_l << std::endl;
-				feature_count = this->get_count_in_fov();
-				degree_between =
-					acos(brute_force.transpose() * rotated_vec) * 180.0f / M_PI;
-				this->quiversforonepoint << this->cnt << ","
-				                         << std::to_string(this->ref_point[0]) << ","
-				                         << std::to_string(this->ref_point[1]) << ","
-				                         << std::to_string(this->ref_point[2]) << ","
-				                         << std::to_string(this->rotated_vec[0]) << ","
-				                         << std::to_string(this->rotated_vec[1]) << ","
-				                         << std::to_string(this->rotated_vec[2]) << ","
-				                         << feature_count << "," << degree_between << ","
-				                         << aJ_l.norm() << "," << step << ","
-				                         << current_visibility << std::endl;
+				if (!this->no_io) {
+					this->ajl << aJ_l << std::endl;
+					feature_count = this->get_count_in_fov();
+					degree_between =
+						acos(brute_force.transpose() * rotated_vec) * 180.0f / M_PI;
+					this->quiversforonepoint << this->cnt << ","
+					                         << std::to_string(this->ref_point[0]) << ","
+					                         << std::to_string(this->ref_point[1]) << ","
+					                         << std::to_string(this->ref_point[2]) << ","
+					                         << std::to_string(this->rotated_vec[0]) << ","
+					                         << std::to_string(this->rotated_vec[1]) << ","
+					                         << std::to_string(this->rotated_vec[2]) << ","
+					                         << feature_count << "," << degree_between << ","
+					                         << aJ_l.norm() << "," << step << ","
+					                         << current_visibility << std::endl;
 
-				this->R_updates_for_ti << this->R * this->c << std::endl;
-				if (this->print_path == true) {
-					this->pathfile << std::to_string(rotated_vec[0]) << ","
-					               << std::to_string(rotated_vec[1]) << ","
-					               << std::to_string(rotated_vec[2]) << std::endl;
+					this->R_updates_for_ti << this->R * this->c << std::endl;
+					if (this->print_path == true) {
+						this->pathfile << std::to_string(rotated_vec[0]) << ","
+						               << std::to_string(rotated_vec[1]) << ","
+						               << std::to_string(rotated_vec[2]) << std::endl;
+					}
 				}
 
 				if (step_norm_jacobian && jacobian_norm > 1e-9f) {
@@ -720,13 +738,18 @@ public:
 				}
 			}
 
-			this->R_updates_for_ti << "\n\n";
-			this->ajl << "\n\n";
+			if (!this->no_io) {
+				this->R_updates_for_ti << "\n\n";
+				this->ajl << "\n\n";
+			}
 			return redo;
 		}
 		
 		/*ADDED: for steepest desent visual*/
 		void calculate_error_all_direction_for_each_t() {
+			if (this->no_io) {
+				return;
+			}
 			float error = 0.0f;
 			for(Eigen::Vector3f direction:this->loader->get_pointcloud()){	
 				direction=direction/direction.norm();
@@ -767,6 +790,9 @@ public:
 		}	
 
 		void calculate_J_all_direction_for_each_t() {
+			if (this->no_io) {
+				return;
+			}
 			for(Eigen::Vector3f direction:this->loader->get_pointcloud()){	
 				Eigen::Vector3f aJ_l;
 				aJ_l << 0, 0, 0;
@@ -838,6 +864,7 @@ private:
 		std::ofstream quaternions;
 		std::ofstream R_updates_for_ti;
 		bool print_path;
+		bool no_io = false;
 		CloudLoader *loader;
 		CloudLoader *loaderrot;
 		int brute_force_max_feature_in_FOV;

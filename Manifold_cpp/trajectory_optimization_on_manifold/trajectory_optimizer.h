@@ -481,43 +481,6 @@ public:
 			}
 		}
 	}
-
-	//NOTE: added by me /not tested
-	double optimizeWithTiming(const std::string& input_trajectory_file, 
-                             const std::string& output_trajectory_file,
-                             const std::string& pointcloud_file,
-                             bool use_direction = false,
-                             bool use_uncertainty = false,
-                             const std::string& direction_uncertainty_file = "") {
-        
-        // Start timing
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        // Initialize with your trajectory file
-        this->initialization(
-            "initial_trajectory_temp.txt",  // temp file for initial trajectory
-            pointcloud_file,
-            "optimized_pointcloud_temp.txt", // temp output
-            use_direction,
-            use_uncertainty,
-            direction_uncertainty_file,
-            "pointcloud_dir_temp.txt",
-            input_trajectory_file,
-            output_trajectory_file
-        );
-        
-        // Run optimization
-        this->optimize(true);  // Set to true to write output
-        
-        // End timing
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> duration = end_time - start_time;
-        
-        std::cout << "Optimization completed in: " << duration.count() << " seconds" << std::endl;
-        
-        return duration.count();
-    }
-
 }
 
 
