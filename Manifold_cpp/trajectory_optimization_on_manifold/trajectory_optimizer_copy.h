@@ -20,6 +20,10 @@
 #include <iomanip>
 #include <algorithm>
 #include <cctype>
+#include <limits>
+#include <voxblox/core/esdf_map.h>
+#include <voxblox/io/layer_io.h>
+#include <voxblox/core/common.h>
 
 
 template <typename T> void print(T x)
@@ -253,6 +257,131 @@ public:
        }
    }
 
+   bool loadEsdfMap(const std::string& esdf_file_path) {
+       try {
+           voxblox::Layer<voxblox::EsdfVoxel>::Ptr layer_ptr;
+           constexpr bool kMultipleLayerSupport = true;
+           if (!voxblox::io::LoadLayer<voxblox::EsdfVoxel>(
+                   esdf_file_path, kMultipleLayerSupport, &layer_ptr)) {
+               std::cerr << "Failed to load ESDF layer from: " << esdf_file_path << std::endl;
+               return false;
+           }
+           this->esdf_map_.reset(new voxblox::EsdfMap(layer_ptr));
+           this->esdf_loaded_ = true;
+           this->esdf_map_path_ = esdf_file_path;
+           this->initializeRaycastDefaultsFromMap();
+           this->invalidateVisibilityCache();
+           std::cout << "Successfully loaded ESDF map from: " << esdf_file_path << std::endl;
+           return true;
+       } catch (const std::exception& e) {
+           std::cerr << "Exception loading ESDF map: " << e.what() << std::endl;
+           this->esdf_loaded_ = false;
+           return false;
+       }
+   }
+
+   size_t prefilterVisiblePoints() {
+       if (!this->esdf_loaded_) {
+           std::cerr << "Warning: ESDF map not loaded. Skipping occlusion filtering." << std::endl;
+           this->invalidateVisibilityCache();
+           return this->valid_points.size();
+       }
+
+       if (this->trajectory.empty()) {
+           std::cerr << "Warning: Trajectory is empty. Cannot pre-filter visibility." << std::endl;
+           this->invalidateVisibilityCache();
+           return this->valid_points.size();
+       }
+
+       if (this->pointcloud_.empty()) {
+           std::cerr << "Warning: Point cloud is empty. Cannot pre-filter visibility." << std::endl;
+           this->invalidateVisibilityCache();
+           return 0;
+       }
+
+       this->visible_points_per_pose_.clear();
+       this->visible_points_per_pose_.resize(this->trajectory.size());
+
+       std::vector<char> seen(this->pointcloud_.size(), 0);
+       size_t unique_visible_count = 0;
+       size_t min_visible = this->valid_points.size();
+       size_t max_visible = 0;
+       size_t total_visible = 0;
+
+       for (size_t pose_idx = 0; pose_idx < this->trajectory.size(); ++pose_idx) {
+           const Eigen::Vector3f camera_pos = this->trajectory[pose_idx].get_position();
+           std::vector<size_t>& pose_visible = this->visible_points_per_pose_[pose_idx];
+           pose_visible.reserve(this->valid_points.size());
+
+           for (size_t idx : this->valid_points) {
+               if (idx >= this->pointcloud_.size()) {
+                   continue;
+               }
+               if (!this->isPointVisible(camera_pos, this->pointcloud_[idx])) {
+                   continue;
+               }
+               pose_visible.push_back(idx);
+               if (!seen[idx]) {
+                   seen[idx] = 1;
+                   unique_visible_count++;
+               }
+           }
+
+           min_visible = std::min(min_visible, pose_visible.size());
+           max_visible = std::max(max_visible, pose_visible.size());
+           total_visible += pose_visible.size();
+       }
+
+       this->visibility_cache_ready_ = true;
+
+       const double avg_visible =
+           this->trajectory.empty()
+               ? 0.0
+               : static_cast<double>(total_visible) / static_cast<double>(this->trajectory.size());
+       std::cout << "Per-pose visibility cache built from " << this->valid_points.size()
+                 << " landmarks: unique visible=" << unique_visible_count
+                 << ", avg/pose=" << avg_visible
+                 << ", min/pose=" << min_visible
+                 << ", max/pose=" << max_visible << std::endl;
+
+       return unique_visible_count;
+   }
+
+   void setEsdfConfig(float distance_threshold_m, bool use_interpolation = true) {
+       if (distance_threshold_m > 0.0f) {
+           this->esdf_config_.distance_threshold_m = distance_threshold_m;
+       }
+       this->esdf_config_.use_interpolation = use_interpolation;
+       this->initializeRaycastDefaultsFromMap();
+       this->invalidateVisibilityCache();
+   }
+
+   void setEsdfRaycastConfig(float ray_step_scale, float ray_min_step_m,
+                             float ray_max_step_m, float endpoint_margin_m,
+                             bool unknown_is_occluded) {
+       if (ray_step_scale > 0.0f) {
+           this->esdf_config_.ray_step_scale = ray_step_scale;
+       }
+       this->esdf_config_.ray_min_step_m = ray_min_step_m;
+       this->esdf_config_.ray_max_step_m = ray_max_step_m;
+       this->esdf_config_.endpoint_margin_m = endpoint_margin_m;
+       this->esdf_config_.unknown_is_occluded = unknown_is_occluded;
+       this->initializeRaycastDefaultsFromMap();
+       this->invalidateVisibilityCache();
+   }
+
+   bool isEsdfLoaded() const {
+       return this->esdf_loaded_;
+   }
+
+   bool isPointVisible(const Eigen::Vector3f& camera_pos,
+                       const Eigen::Vector3f& point_pos) {
+       if (!this->esdf_loaded_ || !this->esdf_map_) {
+           return true;
+       }
+       return this->checkVisibilityEsdf(camera_pos, point_pos);
+   }
+
    void myinitialization(
    const std::string& quivers_filename,
    const std::string& output_initial_trajectory_filename_ue,  //gotta have xyz matched with stamped_twc, and  yaw along path
@@ -308,13 +437,13 @@ public:
        // starting_rotation<<1,0,0,0,1,0,0,0,1;
        // starting_rotation = this->trajectory[0].get_rotation();
 
-
        this->loader.ImportFromXyzFile(input_pointcloud_filename,1,true,false," ");
+       this->pointcloud_ = this->loader.get_pointcloud();
        // if(this->use_direction||this->use_uncertainty){
        //      this->loader.ImportFromDirUncertaintyFile(input_direction_and_uncertainty_filename,1," ");
        // }
        //save pointcloud
-       for (Eigen::Vector3f point:this->loader.get_pointcloud()){
+       for (const Eigen::Vector3f& point : this->pointcloud_){
            this->pcdfile<<point[0]<<","<<point[1]<<","<<point[2]<<std::endl;
        }
        this->pcdfile.close();
@@ -331,8 +460,9 @@ public:
 
 
        this->valid_points.clear();
+       this->invalidateVisibilityCache();
 
-       for (size_t i=0;i<this->loader.get_pointcloud().size();i++){
+       for (size_t i=0;i<this->pointcloud_.size();i++){
            this->valid_points.push_back(i);
        }
    }
@@ -633,8 +763,8 @@ public:
    }
 
    // set each cam pose as frame coordinate reference and express pointcould w.r.t that. 
-   void populate_local_indexes(Eigen::Vector3f ref_point){
-       Eigen::Vector3f pos=ref_point;
+   void populate_local_indexes_for_pose(size_t pose_index){
+       const Eigen::Vector3f pos = this->trajectory[pose_index].get_position();
        this->points_list.clear();
        this->points_list_unnormalized.clear();
        std::vector<Eigen::Vector3f> pointcloud_dir;
@@ -644,42 +774,58 @@ public:
        if(this->use_direction||this->use_uncertainty){
            this->points_dir_list.clear();
            this->points_uncertainty_list.clear();
+           this->max_uncertainty = 0.0f;
            pointcloud_dir=this->loader.get_pointcloud_dir();
            pointcloud_uncertainty=this->loader.get_pointcloud_uncertainty();
        }
-       std::vector<Eigen::Vector3f> pointcloud=this->loader.get_pointcloud();
-       //for(int i;i<pointcloud.size();i++){
+       const std::vector<size_t>& pose_valid_points = this->getValidPointsForPose(pose_index);
 
 
-       this->closest=1000000;
-       this->furthest=0;
-       for (size_t i:this->valid_points){
+       this->closest=std::numeric_limits<float>::max();
+       this->furthest=0.0f;
+       for (size_t i:pose_valid_points){
        //for (Eigen::Vector3f point: this->loader.get_pointcloud()){
            // print_string("point");
            // print_eigen_v(point);
-           Eigen::Vector3f point_pos=pointcloud[i]-pos;
+           if (i >= this->pointcloud_.size()) {
+               continue;
+           }
+           Eigen::Vector3f point_pos=this->pointcloud_[i]-pos;
            // print_string("point_pos");
            // print_eigen_v(point_pos);
-           if (point_pos.norm()>this->furthest)
-               this->furthest=point_pos.norm();
-           if (point_pos.norm()<this->closest)
-               this->closest=point_pos.norm();        
+           const float point_distance = point_pos.norm();
+           if (point_distance <= 1e-6f) {
+               continue;
+           }
+           if (point_distance>this->furthest)
+               this->furthest=point_distance;
+           if (point_distance<this->closest)
+               this->closest=point_distance;        
            // print_string("point_pos");
            // print_eigen_v(point_pos);
           
            this->points_list_unnormalized.push_back(point_pos);
-           point_pos=point_pos/point_pos.norm(); 
+           point_pos=point_pos/point_distance; 
            this->points_list.push_back(point_pos);
 
            if(this->use_direction||this->use_uncertainty){
-               Eigen::Vector3f point_dir=pointcloud_dir[i];
-               float point_uncertainty=pointcloud_uncertainty[i];
+               Eigen::Vector3f point_dir = Eigen::Vector3f::Zero();
+               float point_uncertainty = 0.0f;
+               if (i < pointcloud_dir.size()) {
+                   point_dir = pointcloud_dir[i];
+               }
+               if (i < pointcloud_uncertainty.size()) {
+                   point_uncertainty = pointcloud_uncertainty[i];
+               }
                if (point_uncertainty>this->max_uncertainty){
                    this->max_uncertainty=point_uncertainty;
                }
                this->points_dir_list.push_back(point_dir);
                this->points_uncertainty_list.push_back(point_uncertainty);
            }
+       }
+       if (this->closest == std::numeric_limits<float>::max()) {
+           this->closest = 0.0f;
        }
    }
 
@@ -721,6 +867,7 @@ public:
 
    void change_valid_points_list(std::vector<size_t> valid_list){
        this->valid_points=valid_list;
+       this->invalidateVisibilityCache();
    }
 
    void write_arrow_to_file(Eigen::Vector3f position,Eigen::Vector3f ray_direction){
@@ -746,11 +893,11 @@ public:
            <<std::endl;
    }
 
-   Eigen::Vector3f calculate_FOV_jacobian_for_pose(PoseSE3 pos,int iteration_count,
+   Eigen::Vector3f calculate_FOV_jacobian_for_pose(size_t pose_index,int iteration_count,
                                                    float* visible_count = nullptr,
                                                    float* visibility_score = nullptr){
-    this->populate_local_indexes(pos.get_position());
-    Eigen::Matrix3f R=pos.get_rotation();
+    this->populate_local_indexes_for_pose(pose_index);
+    Eigen::Matrix3f R=this->trajectory[pose_index].get_rotation();
         Eigen::Vector3f aJ_l;
         aJ_l<<0,0,0;
         float residual=0.0;
@@ -818,12 +965,15 @@ public:
             float uncertainty_alpha=3;
             if(this->use_uncertainty){
                     float point_uncertainty=this->points_uncertainty_list[counter];
-                    uncertainty_alpha=1.0*point_uncertainty/this->max_uncertainty;
+                    const float max_uncertainty =
+                        std::max(1e-6f, this->max_uncertainty);
+                    uncertainty_alpha=1.0f*point_uncertainty/max_uncertainty;
                     F_Jacobian=F_Jacobian*uncertainty_alpha;
             }
 
-                float distance=this->points_list_unnormalized[counter].norm();
-                float distance_weight=1.0-(distance-this->closest)/(this->furthest-this->closest);
+                const float distance=this->points_list_unnormalized[counter].norm();
+                const float distance_span = std::max(1e-6f, this->furthest-this->closest);
+                const float distance_weight=1.0f-(distance-this->closest)/distance_span;
                 F_Jacobian=F_Jacobian*distance_weight;
 
         Eigen::Vector3f aJ=F_Jacobian;
@@ -837,7 +987,7 @@ public:
             *visibility_score = vis_score_local;
         }
         if (this->fov_norm_mode == kFovNormPoints) {
-            const float denom = std::max(1.0f, static_cast<float>(this->valid_points.size()));
+            const float denom = std::max(1.0f, static_cast<float>(this->points_list.size()));
             aJ_l = 5* aJ_l / (denom *M_PI);  //changed 
         } else if (this->fov_norm_mode == kFovNormVisible) {
             const float denom = std::max(1.0f, vis_count_local);
@@ -846,15 +996,15 @@ public:
         return aJ_l;
     }
 
-   void calculate_visibility_metrics_for_pose(PoseSE3 pos, int iteration_count,
+   void calculate_visibility_metrics_for_pose(size_t pose_index, int iteration_count,
                                               float visibility_alpha_rad,
                                               float* visible_count,
                                               float* visibility_score) {
        if (!visible_count && !visibility_score) {
            return;
        }
-       this->populate_local_indexes(pos.get_position());
-       Eigen::Matrix3f R = pos.get_rotation();
+       this->populate_local_indexes_for_pose(pose_index);
+       Eigen::Matrix3f R = this->trajectory[pose_index].get_rotation();
        const double ks_iter = GetKsForIteration(iteration_count);
        const float cos_alpha = std::cos(visibility_alpha_rad);
        float vis_count_local = 0.0f;
@@ -887,6 +1037,9 @@ public:
    void optimize(bool write_to_file){
        Eigen::Matrix3f R;
        Eigen::Vector3f v__, v_, v;
+       if (this->esdf_loaded_ && !this->visibility_cache_ready_) {
+           this->prefilterVisiblePoints();
+       }
        saveTrajectoryAsUE_Format(this->trajectory, this->output_initial_trajectory_filename_ue); //should match stamped_twc_ue that we read as input(checking purpose) 
        saveTrajectoryAsTwcFormat(this->trajectory, this->output_initial_trajectory_filename_twc); //should match stamped_twc that we read as input(checking purpose) 
 
@@ -963,7 +1116,7 @@ public:
 				Eigen::Vector3f FOV_Jacobian,combined_Jacobian;
 				float vis_count = 0.0f;
 				float vis_score = 0.0f;
-				FOV_Jacobian=calculate_FOV_jacobian_for_pose(trajectory[j+1],i,
+				FOV_Jacobian=calculate_FOV_jacobian_for_pose(static_cast<size_t>(j + 1),i,
                                                         &vis_count, &vis_score);
                 float norm_scale = norm_scale_iter;
                 float smooth_scale = 0.5f;
@@ -1019,11 +1172,11 @@ public:
                     float vis_score_fixed = 0.0f;
                     const float alpha_rad = GetVisibilityAlpha(i);
                     this->calculate_visibility_metrics_for_pose(
-                        this->trajectory[j+1], i, alpha_rad,
+                        static_cast<size_t>(j + 1), i, alpha_rad,
                         &vis_count_post, &vis_score_post);
                     constexpr float kFixedAlphaRad = 30.0f * static_cast<float>(M_PI) / 180.0f;
                     this->calculate_visibility_metrics_for_pose(
-                        this->trajectory[j+1], i, kFixedAlphaRad,
+                        static_cast<size_t>(j + 1), i, kFixedAlphaRad,
                         &vis_count_fixed, &vis_score_fixed);
 
                    const Eigen::Vector3f pos = this->trajectory[j+1].get_position();
@@ -1066,7 +1219,7 @@ public:
                        float vis_score = 0.0f;
                        const float debug_alpha_rad = 30.0f * M_PI / 180.0f;
                        this->calculate_visibility_metrics_for_pose(
-                           this->trajectory[k], i, debug_alpha_rad,
+                           k, i, debug_alpha_rad,
                            &vis_count, &vis_score);
                        this->write_arrow_with_metrics(this->quivers_metrics_file,
                                                       this->trajectory[k].get_position(), v_,
@@ -1170,6 +1323,109 @@ private:
        return dyn;
    }
 
+   bool checkVisibilityEsdf(const Eigen::Vector3f& camera_pos,
+                            const Eigen::Vector3f& point_pos) const {
+       if (!this->esdf_map_) {
+           return true;
+       }
+
+       double dist_camera = 0.0;
+       double dist_point = 0.0;
+
+       const bool camera_query_valid = this->esdf_map_->getDistanceAtPosition(
+           camera_pos.cast<double>(),
+           this->esdf_config_.use_interpolation,
+           &dist_camera);
+       const bool point_query_valid = this->esdf_map_->getDistanceAtPosition(
+           point_pos.cast<double>(),
+           this->esdf_config_.use_interpolation,
+           &dist_point);
+
+       if (!camera_query_valid || !point_query_valid) {
+           return !this->esdf_config_.unknown_is_occluded;
+       }
+
+       if (!std::isfinite(dist_camera) || !std::isfinite(dist_point)) {
+           return !this->esdf_config_.unknown_is_occluded;
+       }
+
+       const float threshold = this->esdf_config_.distance_threshold_m;
+       if (static_cast<float>(dist_camera) <= threshold ||
+           static_cast<float>(dist_point) <= threshold) {
+           return false;
+       }
+
+       const Eigen::Vector3d src = camera_pos.cast<double>();
+       const Eigen::Vector3d dst = point_pos.cast<double>();
+       const Eigen::Vector3d delta = dst - src;
+       const double total_len = delta.norm();
+       const float endpoint_margin = std::max(0.0f, this->esdf_config_.endpoint_margin_m);
+       if (total_len <= endpoint_margin) {
+           return false;
+       }
+
+       const double ray_min_step =
+           std::max(1e-3f, this->esdf_config_.ray_min_step_m);
+       const double ray_max_step =
+           std::max(static_cast<double>(ray_min_step),
+                    static_cast<double>(this->esdf_config_.ray_max_step_m));
+       const Eigen::Vector3d dir = delta / total_len;
+       double t = ray_min_step;
+       const double t_end = total_len - endpoint_margin;
+       while (t < t_end) {
+           const Eigen::Vector3d sample = src + dir * t;
+           double dist_sample = 0.0;
+           const bool observed = this->esdf_map_->getDistanceAtPosition(
+               sample, this->esdf_config_.use_interpolation, &dist_sample);
+           if (!observed || !std::isfinite(dist_sample)) {
+               return !this->esdf_config_.unknown_is_occluded;
+           }
+           if (dist_sample <= threshold) {
+               return false;
+           }
+
+           double step = std::max(
+               ray_min_step,
+               static_cast<double>(dist_sample) * this->esdf_config_.ray_step_scale);
+           step = std::min(step, ray_max_step);
+           t += step;
+       }
+
+       return true;
+   }
+
+   void initializeRaycastDefaultsFromMap() {
+       if (!this->esdf_map_) {
+           return;
+       }
+       const float voxel_size = static_cast<float>(this->esdf_map_->voxel_size());
+       if (voxel_size <= 0.0f) {
+           return;
+       }
+       if (this->esdf_config_.ray_min_step_m <= 0.0f) {
+           this->esdf_config_.ray_min_step_m = 0.5f * voxel_size;
+       }
+       if (this->esdf_config_.ray_max_step_m <= 0.0f) {
+           this->esdf_config_.ray_max_step_m = 2.0f * voxel_size;
+       }
+       if (this->esdf_config_.endpoint_margin_m <= 0.0f) {
+           this->esdf_config_.endpoint_margin_m = 1.5f * voxel_size;
+       }
+   }
+
+   void invalidateVisibilityCache() {
+       this->visible_points_per_pose_.clear();
+       this->visibility_cache_ready_ = false;
+   }
+
+   const std::vector<size_t>& getValidPointsForPose(size_t pose_index) const {
+       if (this->visibility_cache_ready_ &&
+           pose_index < this->visible_points_per_pose_.size()) {
+           return this->visible_points_per_pose_[pose_index];
+       }
+       return this->valid_points;
+   }
+
    Eigen::Vector3f v;
    std::vector<PoseSE3> trajectory;
    std::vector<double> imported_times_;
@@ -1184,6 +1440,7 @@ private:
    std::string output_trajectory_filename_twc;
    int max_iteration=30;
    CloudLoader loader;
+   std::vector<Eigen::Vector3f> pointcloud_;
    std::vector<Eigen::Vector3f> points_list;
    std::vector<Eigen::Vector3f> points_list_unnormalized;
    std::vector<Eigen::Vector3f> points_dir_list;
@@ -1203,6 +1460,23 @@ private:
    std::ofstream montecarlopointsdirfile;
    std::ofstream pcdfile;
    std::vector<size_t> valid_points;
+   std::vector<std::vector<size_t>> visible_points_per_pose_;
+   bool visibility_cache_ready_ = false;
+
+   struct EsdfConfig {
+       float distance_threshold_m = 0.1f;
+       bool use_interpolation = true;
+       float ray_step_scale = 0.8f;
+       float ray_min_step_m = -1.0f;
+       float ray_max_step_m = -1.0f;
+       float endpoint_margin_m = -1.0f;
+       bool unknown_is_occluded = true;
+   };
+
+   EsdfConfig esdf_config_;
+   voxblox::EsdfMap::Ptr esdf_map_;
+   bool esdf_loaded_ = false;
+   std::string esdf_map_path_;
 
 
    bool use_uncertainty=false;

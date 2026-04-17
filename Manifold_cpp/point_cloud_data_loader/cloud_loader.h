@@ -363,6 +363,10 @@ public:
 		
 		this->filename = data_filename;
 		this->data_file.open(this->filename);
+		const size_t base_pos = this->filename.find_last_of("/\\");
+		const std::string base_name =
+			(base_pos == std::string::npos) ? this->filename : this->filename.substr(base_pos + 1);
+		const bool is_raw_colmap_points3d = simple && (base_name == "points3D.txt");
 		
 		if (!this->data_file.is_open()) {
 			std::cerr << "Failed to open the file for reading." << std::endl;
@@ -385,28 +389,31 @@ public:
 				continue;
 			}
 
-			try {
-				std::vector<std::string> splitted_line = this->split_string(line, delimiter);
-				
-				// Validate we have enough elements
-				if (simple) {
-					if (splitted_line.size() < 3) {
-						std::cerr << "Line " << count << ": Expected at least 3 values for simple format, got " << splitted_line.size() << std::endl;
-						count++;
-						continue;
-					}
-				} else {
-					if (splitted_line.size() < 6) {
+				try {
+					std::vector<std::string> splitted_line = this->split_string(line, delimiter);
+					
+					// Validate we have enough elements
+					if (simple) {
+						const size_t min_cols = is_raw_colmap_points3d ? 4u : 3u;
+						if (splitted_line.size() < min_cols) {
+							std::cerr << "Line " << count << ": Expected at least " << min_cols
+							          << " values for simple format, got " << splitted_line.size() << std::endl;
+							count++;
+							continue;
+						}
+					} else {
+						if (splitted_line.size() < 6) {
 						std::cerr << "Line " << count << ": Expected at least 6 values for RGB format, got " << splitted_line.size() << std::endl;
 						count++;
 						continue;
 					}
-				}
+					}
 
-				// Parse coordinates
-				float x = std::stof(splitted_line[0]);
-				float y = std::stof(splitted_line[1]);
-				float z = std::stof(splitted_line[2]);
+					// Parse coordinates
+					const size_t xyz_offset = is_raw_colmap_points3d ? 1u : 0u;
+					float x = std::stof(splitted_line[xyz_offset + 0]);
+					float y = std::stof(splitted_line[xyz_offset + 1]);
+					float z = std::stof(splitted_line[xyz_offset + 2]);
 				
 				float r = 0, g = 0, b = 0;
 				if (!simple) {

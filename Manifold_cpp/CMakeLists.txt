@@ -11,7 +11,27 @@ add_compile_options(-std=c++14) #optional to use c++11
 
 
 find_package(Eigen3 REQUIRED)
+find_package(voxblox QUIET)
 link_directories(${Eigen_INCLUDE_DIRS})
+include_directories(/usr/include/eigen3)
+
+set(VOXBLOX_LOCAL_INCLUDE_DIRS
+  /home/shekoufeh/fov/FIF_ws/src/voxblox/voxblox/include
+  /home/shekoufeh/fov/FIF_ws/src/minkindr/minkindr/include
+  /home/shekoufeh/fov/FIF_ws/devel/include
+  /home/shekoufeh/fov/FIF_ws/devel/.private/voxblox/include
+)
+set(VOXBLOX_LOCAL_LIBS
+  /home/shekoufeh/fov/FIF_ws/devel/lib/libvoxblox.so
+  /home/shekoufeh/fov/FIF_ws/devel/lib/libvoxblox_proto.so
+  /usr/lib/x86_64-linux-gnu/libglog.so.0
+  /usr/lib/x86_64-linux-gnu/libgflags.so.2.2
+)
+set(VOXBLOX_LOCAL_AVAILABLE FALSE)
+if(EXISTS "/home/shekoufeh/fov/FIF_ws/src/voxblox/voxblox/include/voxblox/core/esdf_map.h"
+   AND EXISTS "/home/shekoufeh/fov/FIF_ws/devel/lib/libvoxblox.so")
+  set(VOXBLOX_LOCAL_AVAILABLE TRUE)
+endif()
 
 
 
@@ -44,3 +64,15 @@ target_link_directories (${PROJECT_NAME}_trajectory
 target_link_libraries(${PROJECT_NAME}_trajectory
    ${Eigen_LIBRARIES}  manifold cloud_loader trajectory_optimizer e_manager montecarlo
    )
+
+if(voxblox_FOUND)
+  target_include_directories(${PROJECT_NAME}_trajectory PRIVATE ${voxblox_INCLUDE_DIRS})
+  target_link_libraries(${PROJECT_NAME}_trajectory ${voxblox_LIBRARIES})
+  message(STATUS "Voxblox found - ESDF occlusion filtering enabled")
+elseif(VOXBLOX_LOCAL_AVAILABLE)
+  target_include_directories(${PROJECT_NAME}_trajectory PRIVATE ${VOXBLOX_LOCAL_INCLUDE_DIRS})
+  target_link_libraries(${PROJECT_NAME}_trajectory ${VOXBLOX_LOCAL_LIBS})
+  message(STATUS "Using local FIF_ws Voxblox fallback - ESDF occlusion filtering enabled")
+else()
+  message(STATUS "Voxblox not found - ESDF occlusion filtering will be disabled")
+endif()

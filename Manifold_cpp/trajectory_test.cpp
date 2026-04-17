@@ -1,7 +1,6 @@
 // #include <manifold.h>
 // #include <cloud_loader.h>
 // #include <monte_carlo.h>
-#include <experiment_manager.h>
 // #include <trajectory_optimizer.h>
 #include <trajectory_optimizer_copy.h>
 #include <cstdlib>
@@ -211,6 +210,29 @@ bool ReadEnvFloatList(const char* name, std::vector<float>* out) {
 	return any;
 }
 
+std::string ResolvePointCloudPath(const std::string& input_dir,
+	                               const int argc,
+	                               char* argv[]) {
+	if (argc == 5) {
+		return std::string(argv[4]);
+	}
+	const std::string env_path = ReadEnvString("FOV_OPT_POINTS_PATH");
+	if (!env_path.empty()) {
+		return env_path;
+	}
+	const std::vector<std::string> candidates = {
+		JoinPath(input_dir, "sparse/0/stripped_points3D.txt"),
+		JoinPath(input_dir, "segmented_pointcloud.txt"),
+		JoinPath(input_dir, "sparse/0/points3D.txt"),
+	};
+	for (const std::string& candidate : candidates) {
+		if (FileExists(candidate)) {
+			return candidate;
+		}
+	}
+	return candidates.front();
+}
+
 void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	int max_iter = 0;
 	if (ReadEnvInt("FOV_OPT_MAX_ITER", &max_iter)) {
@@ -248,6 +270,30 @@ void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 		optimizer.set_log_jacobian(log_jacobian);
 	}
 }
+
+void ApplyEsdfEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
+	float esdf_threshold = 0.1f;
+	ReadEnvFloat("FOV_OPT_ESDF_THRESHOLD", &esdf_threshold);
+	bool use_interp = true;
+	int use_interp_int = 0;
+	if (ReadEnvInt("FOV_OPT_ESDF_USE_INTERP", &use_interp_int)) {
+		use_interp = (use_interp_int != 0);
+	}
+	optimizer.setEsdfConfig(esdf_threshold, use_interp);
+
+	float ray_step_scale = 0.8f;
+	ReadEnvFloat("FOV_OPT_ESDF_RAY_STEP_SCALE", &ray_step_scale);
+	float ray_min_step = -1.0f;
+	ReadEnvFloat("FOV_OPT_ESDF_RAY_MIN_STEP", &ray_min_step);
+	float ray_max_step = -1.0f;
+	ReadEnvFloat("FOV_OPT_ESDF_RAY_MAX_STEP", &ray_max_step);
+	float endpoint_margin = -1.0f;
+	ReadEnvFloat("FOV_OPT_ESDF_ENDPOINT_MARGIN", &endpoint_margin);
+	bool unknown_is_occluded = true;
+	ReadEnvBool("FOV_OPT_ESDF_UNKNOWN_IS_OCCLUDED", &unknown_is_occluded);
+	optimizer.setEsdfRaycastConfig(ray_step_scale, ray_min_step, ray_max_step,
+		endpoint_margin, unknown_is_occluded);
+}
 }  // namespace
 
 int main(int argc, char *argv[]){
@@ -262,10 +308,7 @@ int main(int argc, char *argv[]){
 	}
 
 	std::string output_pointcloud_file(JoinPath(output_dir, "trajectory_pointcloud.csv"));
-	std::string input_file("/home/shekoufeh/fov_ws/my_FIF-perception-aware-planning/act_map_exp/localization/warehouse_base/sparse/0/points3D.txt");
-	if (argc == 5) {
-		input_file = argv[4];
-	}
+	std::string input_file = ResolvePointCloudPath(input_dir, argc, argv);
 
 
 	std::string input_trajectory_file;
@@ -332,6 +375,20 @@ int main(int argc, char *argv[]){
 		input_file,output_pointcloud_file,use_direction,use_uncertainty,input_dir_file,
 		output_pointcloud_dir_file,input_trajectory_file,output_trajectory_file, output_trajectory_file_ue, output_trajectory_file_twc);
 	ApplyEnvOverrides(traj_op);
+
+	std::string esdf_map_path = ReadEnvString("FOV_OPT_ESDF_PATH");
+	if (!esdf_map_path.empty()) {
+		std::cout << "=== ESDF Integration ===" << std::endl;
+		if (traj_op.loadEsdfMap(esdf_map_path)) {
+			ApplyEsdfEnvOverrides(traj_op);
+			size_t visible_count = traj_op.prefilterVisiblePoints();
+			std::cout << "Pre-filtering complete. Unique visible landmarks="
+			          << visible_count << std::endl;
+		} else {
+			std::cerr << "Warning: Failed to load ESDF from " << esdf_map_path << std::endl;
+			std::cerr << "Continuing optimization without occlusion filtering." << std::endl;
+		}
+	}
 
 	traj_op.optimize(true);
 		
