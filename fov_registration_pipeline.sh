@@ -21,7 +21,11 @@ cd "$isaac_dir"
 sleep 5
 
 cd "$FOVTEST_DIR"
-python3 "$COLMAP_SCRIPTS/my_render_ue.py" optimized_stamped_Twc_ue.txt --save_dir ./
+pose_file="stamped_Twc_ue.txt"
+if [[ ! -f "${pose_file}" && -f "optimized_stamped_Twc_ue.txt" ]]; then
+  pose_file="optimized_stamped_Twc_ue.txt"
+fi
+python3 "$COLMAP_SCRIPTS/my_render_ue.py" "${pose_file}" --save_dir ./
 python3 "$COLMAP_SCRIPTS/generate_img_rel_path.py" \
   --base_dir ../warehouse_base/images \
   --img_dir ./images \

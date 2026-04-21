@@ -3,6 +3,7 @@
 // #include <monte_carlo.h>
 // #include <trajectory_optimizer.h>
 #include <trajectory_optimizer_copy.h>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -179,6 +180,34 @@ bool FileExists(const std::string& path) {
 	return in.good();
 }
 
+void RemoveIfExists(const std::string& path) {
+	if (!path.empty()) {
+		std::remove(path.c_str());
+	}
+}
+
+void CleanupLegacyOutputFiles(const std::string& output_dir) {
+	const std::vector<std::string> legacy_files = {
+		"initial_quivers_path_yaw.txt",
+		"initial_quivers_path_yaw_metrics.txt",
+		"optimized_quivers_path_yaw.txt",
+		"quivers_path_yaw.txt",
+		"quivers_path_yaw_metrics.txt",
+		"quivers_path_yaw_visible_idx.txt",
+		"initial_quivers_path_yaw_visible_idx.txt",
+		"visible_features_per_iteration.txt",
+		"optimized_stamped_Twc_path_yaw.txt",
+		"optimized_stamped_Twc_ue_path_yaw.txt",
+		"stamped_Twc_path_yaw.txt",
+		"stamped_Twc_ue_path_yaw.txt",
+		"initial_trajectory_twc_path_yaw.txt",
+		"initial_trajectory_ue_path_yaw.txt",
+	};
+	for (const std::string& name : legacy_files) {
+		RemoveIfExists(JoinPath(output_dir, name));
+	}
+}
+
 std::string ReadEnvString(const char* name) {
 	const char* raw = std::getenv(name);
 	if (!raw || !*raw) {
@@ -235,7 +264,8 @@ std::string ResolvePointCloudPath(const std::string& input_dir,
 
 void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	int max_iter = 0;
-	if (ReadEnvInt("FOV_OPT_MAX_ITER", &max_iter)) {
+	if (ReadEnvInt("FOV_OPT_MAX_ITER", &max_iter) ||
+	    ReadEnvInt("FOV_OPT_MAX_ITERATION", &max_iter)) {
 		optimizer.set_max_iteration(max_iter);
 	}
 	double ks = 0.0;
@@ -258,7 +288,8 @@ void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 		optimizer.set_step_limits_deg(min_step_deg, max_step_deg);
 	}
 	float traj_jac_step = 0.0f;
-	if (ReadEnvFloat("FOV_OPT_TRAJ_JAC_STEP", &traj_jac_step)) {
+	if (ReadEnvFloat("FOV_OPT_TRAJ_JAC_STEP", &traj_jac_step) ||
+	    ReadEnvFloat("FOV_OPT_TRAJECTORY_JACOBIAN_STEP", &traj_jac_step)) {
 		optimizer.set_trajectory_jacobian_step(traj_jac_step);
 	}
 	std::vector<float> fov_schedule;
@@ -294,6 +325,20 @@ void ApplyEsdfEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	optimizer.setEsdfRaycastConfig(ray_step_scale, ray_min_step, ray_max_step,
 		endpoint_margin, unknown_is_occluded);
 }
+
+void ApplyVisibleFeatureDumpOverride(myTrajectoryOptimizerOnManifold& optimizer,
+	                                 const std::string& default_path) {
+	bool dump_visible_features = false;
+	if (!ReadEnvBool("FOV_OPT_DUMP_VISIBLE_FEATURES", &dump_visible_features) ||
+	    !dump_visible_features) {
+		return;
+	}
+	std::string dump_path = ReadEnvString("FOV_OPT_VISIBLE_FEATURES_PATH");
+	if (dump_path.empty()) {
+		dump_path = default_path;
+	}
+	optimizer.set_visible_feature_dump_path(dump_path);
+}
 }  // namespace
 
 int main(int argc, char *argv[]){
@@ -318,38 +363,45 @@ int main(int argc, char *argv[]){
 	std::string output_initial_file;
 	std::string output_initial_file_ue;
 	std::string output_initial_file_twc;
+	std::string output_visible_features_file;
+	std::string generated_input_trajectory_file;
+
+	CleanupLegacyOutputFiles(output_dir);
 
 	if (along_path) {
 		const std::string base_twc = JoinPath(input_dir, "stamped_Twc.txt");
-		const std::string generated_twc = JoinPath(output_dir, "stamped_Twc_path_yaw.txt");
+		const std::string generated_twc = JoinPath(output_dir, ".input_stamped_Twc.txt");
 		std::vector<TwcSample> base_samples = LoadTwcFile(base_twc);
 		std::vector<TwcSample> path_samples = BuildPathYaw(base_samples);
 		if (!SaveTwcFile(generated_twc, path_samples)) {
 			return 1;
 		}
+		generated_input_trajectory_file = generated_twc;
 		input_trajectory_file = generated_twc;
 
-		output_trajectory_file = JoinPath(output_dir, "optimized_quivers_path_yaw.txt");
+		output_trajectory_file = "";
 		output_trajectory_file_ue =
-			JoinPath(output_dir, "stamped_Twc_ue_path_yaw.txt");
+			JoinPath(output_dir, "stamped_Twc_ue.txt");
 		output_trajectory_file_twc =
-			JoinPath(output_dir, "optimized_stamped_Twc_path_yaw.txt");
+			JoinPath(output_dir, "stamped_Twc.txt");
 
-		output_initial_file = JoinPath(output_dir, "initial_quivers_path_yaw.txt");
-		output_initial_file_ue =
-			JoinPath(output_dir, "initial_trajectory_ue_path_yaw.txt");
-		output_initial_file_twc =
-			JoinPath(output_dir, "initial_trajectory_twc_path_yaw.txt");
+		output_initial_file = JoinPath(output_dir, "per_iteration_quivers.txt");
+		output_initial_file_ue = "";
+		output_initial_file_twc = "";
+		output_visible_features_file =
+			JoinPath(output_dir, "visible_features_per_iteration.txt");
 	} else {
 		input_trajectory_file = JoinPath(input_dir, "stamped_Twc.txt");
 
-		output_trajectory_file = JoinPath(output_dir, "optimized_quivers.txt");
+		output_trajectory_file = "";
 		output_trajectory_file_ue = JoinPath(output_dir, "stamped_Twc_ue.txt");
 		output_trajectory_file_twc = JoinPath(output_dir, "stamped_Twc.txt");
 
-		output_initial_file = JoinPath(output_dir, "initial_quivers.txt");
-		output_initial_file_ue = JoinPath(output_dir, "initial_trajectory_ue.txt");
-		output_initial_file_twc = JoinPath(output_dir, "initial_trajectory_twc.txt");
+		output_initial_file = JoinPath(output_dir, "per_iteration_quivers.txt");
+		output_initial_file_ue = "";
+		output_initial_file_twc = "";
+		output_visible_features_file =
+			JoinPath(output_dir, "visible_features_per_iteration.txt");
 	}
 
 	std::string warm_start_flag = ReadEnvString("FOV_OPT_WARM_START");
@@ -375,6 +427,7 @@ int main(int argc, char *argv[]){
 		input_file,output_pointcloud_file,use_direction,use_uncertainty,input_dir_file,
 		output_pointcloud_dir_file,input_trajectory_file,output_trajectory_file, output_trajectory_file_ue, output_trajectory_file_twc);
 	ApplyEnvOverrides(traj_op);
+	ApplyVisibleFeatureDumpOverride(traj_op, output_visible_features_file);
 
 	std::string esdf_map_path = ReadEnvString("FOV_OPT_ESDF_PATH");
 	if (!esdf_map_path.empty()) {
@@ -391,6 +444,10 @@ int main(int argc, char *argv[]){
 	}
 
 	traj_op.optimize(true);
+	if (!generated_input_trajectory_file.empty() &&
+	    generated_input_trajectory_file != output_trajectory_file_twc) {
+		std::remove(generated_input_trajectory_file.c_str());
+	}
 		
 
 }

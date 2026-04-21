@@ -143,6 +143,11 @@ public:
        this->debug_log_path = path;
        this->debug_log_enabled = true;
    }
+   void set_visible_feature_dump_path(const std::string& path) {
+       this->visible_feature_dump_path_ = path;
+       this->visible_feature_dump_enabled_ = !path.empty();
+       this->maybe_open_visible_feature_dump_file();
+   }
 
    void set_step_norm_mode(const std::string& mode) {
        std::string lower = mode;
@@ -406,13 +411,19 @@ public:
        this->quivers_filename=quivers_filename;
 	   this->output_initial_trajectory_filename_ue = output_initial_trajectory_filename_ue;
        this->output_initial_trajectory_filename_twc = output_initial_trajectory_filename_twc;
-       this->quivers_metrics_filename =
-           AppendSuffixBeforeExtension(this->quivers_filename, "_metrics");
-       this->quivers_metrics_file.open(this->quivers_metrics_filename);
-       // Write per-iteration quivers (positions + view dirs) for progress plots.
-       this->initial_trajectory_file.open(this->quivers_filename);
+       if (!this->quivers_filename.empty()) {
+           this->initial_trajectory_file.open(this->quivers_filename);
+           if (this->initial_trajectory_file.is_open()) {
+               this->initial_trajectory_file
+                   << "# columns: x,y,z,dx,dy,dz,visible_count,visibility_score\n"
+                   << "# blocks: blank-line separated iterations\n";
+           }
+       }
+       this->maybe_open_visible_feature_dump_file();
 
-	   this->output_trajectory_file.open(output_trajectory_filename);
+       if (!output_trajectory_filename.empty()) {
+	       this->output_trajectory_file.open(output_trajectory_filename);
+       }
        this->output_trajectory_filename_ue= output_trajectory_filename_ue;
        this->output_trajectory_filename_twc= output_trajectory_filename_twc;
 
@@ -586,6 +597,9 @@ public:
 
    void saveTrajectoryAsUE_Format(const std::vector<PoseSE3>& trajectory, const std::string& filename)
    {
+       if (filename.empty()) {
+           return;
+       }
        std::ofstream ueFile(filename);
        if (!ueFile.is_open()) {
            std::cerr << "Cannot open file: " << filename << std::endl;
@@ -622,6 +636,9 @@ public:
    void saveTrajectoryAsTwcFormat(const std::vector<PoseSE3>& trajectory,
                                   const std::string& filename)
    {
+       if (filename.empty()) {
+           return;
+       }
        std::ofstream twcFile(filename);
        if (!twcFile.is_open()) {
            std::cerr << "Cannot open file: " << filename << std::endl;
@@ -778,6 +795,7 @@ public:
            pointcloud_dir=this->loader.get_pointcloud_dir();
            pointcloud_uncertainty=this->loader.get_pointcloud_uncertainty();
        }
+       this->points_index_list.clear();
        const std::vector<size_t>& pose_valid_points = this->getValidPointsForPose(pose_index);
 
 
@@ -807,6 +825,7 @@ public:
            this->points_list_unnormalized.push_back(point_pos);
            point_pos=point_pos/point_distance; 
            this->points_list.push_back(point_pos);
+           this->points_index_list.push_back(i);
 
            if(this->use_direction||this->use_uncertainty){
                Eigen::Vector3f point_dir = Eigen::Vector3f::Zero();
@@ -870,6 +889,31 @@ public:
        this->invalidateVisibilityCache();
    }
 
+   std::vector<size_t> get_visible_feature_indices_for_pose(size_t pose_index,
+                                                            float visibility_alpha_rad){
+       std::vector<size_t> visible_indices;
+       if (pose_index >= this->trajectory.size()) {
+           return visible_indices;
+       }
+       this->populate_local_indexes_for_pose(pose_index);
+       if (this->points_list.empty()) {
+           return visible_indices;
+       }
+       visible_indices.reserve(this->points_list.size());
+       const Eigen::Matrix3f R = this->trajectory[pose_index].get_rotation();
+       const float cos_alpha = std::cos(visibility_alpha_rad);
+       const size_t count =
+           std::min(this->points_list.size(), this->points_index_list.size());
+       for (size_t idx = 0; idx < count; ++idx) {
+           const Eigen::Vector3f& K_ = this->points_list[idx];
+           const float u = (K_.transpose()) * R * this->c;
+           if (u >= cos_alpha) {
+               visible_indices.push_back(this->points_index_list[idx]);
+           }
+       }
+       return visible_indices;
+   }
+
    void write_arrow_to_file(Eigen::Vector3f position,Eigen::Vector3f ray_direction){
        if (!this->initial_trajectory_file.is_open()) {
            return;
@@ -878,6 +922,9 @@ public:
     }
 
    void write_arrow_to_output_file(Eigen::Vector3f position,Eigen::Vector3f ray_direction){
+       if (!this->output_trajectory_file.is_open()) {
+           return;
+       }
        this->output_trajectory_file<<std::to_string(position[0])<<","<<std::to_string(position[1])<<","<<std::to_string(position[2])<<","<<std::to_string(ray_direction[0])<<","<<std::to_string(ray_direction[1])<<","<<std::to_string(ray_direction[2])<<std::endl;
    }
 
@@ -999,13 +1046,15 @@ public:
    void calculate_visibility_metrics_for_pose(size_t pose_index, int iteration_count,
                                               float visibility_alpha_rad,
                                               float* visible_count,
-                                              float* visibility_score) {
+                                              float* visibility_score,
+                                              double visibility_ks = -1.0) {
        if (!visible_count && !visibility_score) {
            return;
        }
        this->populate_local_indexes_for_pose(pose_index);
        Eigen::Matrix3f R = this->trajectory[pose_index].get_rotation();
-       const double ks_iter = GetKsForIteration(iteration_count);
+       const double ks_iter =
+           (visibility_ks > 0.0) ? visibility_ks : GetKsForIteration(iteration_count);
        const float cos_alpha = std::cos(visibility_alpha_rad);
        float vis_count_local = 0.0f;
        float vis_score_local = 0.0f;
@@ -1037,6 +1086,7 @@ public:
    void optimize(bool write_to_file){
        Eigen::Matrix3f R;
        Eigen::Vector3f v__, v_, v;
+       this->maybe_open_visible_feature_dump_file();
        if (this->esdf_loaded_ && !this->visibility_cache_ready_) {
            this->prefilterVisiblePoints();
        }
@@ -1204,26 +1254,41 @@ public:
 
            if (write_to_file){
                if (this->initial_trajectory_file.is_open()) {
-                   this->initial_trajectory_file<<std::endl;
+                   if (i > 0) {
+                       this->initial_trajectory_file << std::endl;
+                   }
+                   this->initial_trajectory_file << "# iteration " << i << std::endl;
                }
-               if (this->quivers_metrics_file.is_open()) {
-                   this->quivers_metrics_file<<std::endl;
+               if (this->visible_feature_dump_file_.is_open()) {
+                   if (i > 0) {
+                       this->visible_feature_dump_file_ << std::endl;
+                   }
+                   this->visible_feature_dump_file_ << "# iteration " << i << std::endl;
                }
+               const float export_alpha_rad = GetMetricVisibilityAlpha();
+               const double export_ks = GetMetricKs();
                for (size_t k = 0; k < this->trajectory.size(); ++k) {
                    R = this->trajectory[k].get_rotation();
                    v_ = this->c;
                    v_ = R * v_;
-                   this->write_arrow_to_file(this->trajectory[k].get_position(), v_);
-                   if (this->quivers_metrics_file.is_open()) {
+                   if (this->initial_trajectory_file.is_open()) {
                        float vis_count = 0.0f;
                        float vis_score = 0.0f;
-                       const float debug_alpha_rad = 30.0f * M_PI / 180.0f;
                        this->calculate_visibility_metrics_for_pose(
-                           k, i, debug_alpha_rad,
-                           &vis_count, &vis_score);
-                       this->write_arrow_with_metrics(this->quivers_metrics_file,
+                           k, i, export_alpha_rad,
+                           &vis_count, &vis_score, export_ks);
+                       this->write_arrow_with_metrics(this->initial_trajectory_file,
                                                       this->trajectory[k].get_position(), v_,
                                                       vis_count, vis_score);
+                   }
+                   if (this->visible_feature_dump_file_.is_open()) {
+                       const std::vector<size_t> visible_idx =
+                           this->get_visible_feature_indices_for_pose(k, export_alpha_rad);
+                       this->visible_feature_dump_file_ << k;
+                       for (size_t idx : visible_idx) {
+                           this->visible_feature_dump_file_ << " " << idx;
+                       }
+                       this->visible_feature_dump_file_ << std::endl;
                    }
                }
            }
@@ -1276,6 +1341,13 @@ public:
    }
 
 private:
+   float GetMetricVisibilityAlpha() const {
+       if (!this->fov_schedule_rad.empty()) {
+           return this->fov_schedule_rad.back();
+       }
+       return this->visibility_alpha;
+   }
+
    float GetVisibilityAlpha(int iteration_count) const {
        if (!this->fov_schedule_rad.empty()) {
            const int stages = static_cast<int>(this->fov_schedule_rad.size());
@@ -1299,15 +1371,14 @@ private:
        }
         if (ratio < 0.2f) {
               return this->visibility_alpha_30;
-        }
+       }
        return this->visibility_alpha;
    }
 
-   double GetKsForIteration(int iteration_count) const {
+   double GetKsForVisibilityAlpha(float alpha) const {
        if (!this->ks_from_visibility || this->ks_transition_deg <= 0.0f) {
            return this->ks;
        }
-       const float alpha = GetVisibilityAlpha(iteration_count);
        const double sin_alpha = std::sin(static_cast<double>(alpha));
        if (std::abs(sin_alpha) < 1e-6) {
            return this->ks;
@@ -1321,6 +1392,14 @@ private:
            return this->ks;
        }
        return dyn;
+   }
+
+   double GetMetricKs() const {
+       return GetKsForVisibilityAlpha(GetMetricVisibilityAlpha());
+   }
+
+   double GetKsForIteration(int iteration_count) const {
+       return GetKsForVisibilityAlpha(GetVisibilityAlpha(iteration_count));
    }
 
    bool checkVisibilityEsdf(const Eigen::Vector3f& camera_pos,
@@ -1418,6 +1497,24 @@ private:
        this->visibility_cache_ready_ = false;
    }
 
+   void maybe_open_visible_feature_dump_file() {
+       if (!this->visible_feature_dump_enabled_ ||
+           this->visible_feature_dump_path_.empty() ||
+           this->visible_feature_dump_file_.is_open()) {
+           return;
+       }
+       this->visible_feature_dump_file_.open(this->visible_feature_dump_path_);
+       if (this->visible_feature_dump_file_.is_open()) {
+           this->visible_feature_dump_file_
+               << "# format: one iteration block per blank-line-separated section\n"
+               << "# each non-comment line: pose_index global_point_index ...\n";
+           return;
+       }
+       std::cerr << "Warning: failed to open visible feature dump file: "
+                 << this->visible_feature_dump_path_ << std::endl;
+       this->visible_feature_dump_enabled_ = false;
+   }
+
    const std::vector<size_t>& getValidPointsForPose(size_t pose_index) const {
        if (this->visibility_cache_ready_ &&
            pose_index < this->visible_points_per_pose_.size()) {
@@ -1431,8 +1528,6 @@ private:
    std::vector<double> imported_times_;
    std::string quivers_filename ;
    std::ofstream initial_trajectory_file;
-   std::string quivers_metrics_filename;
-   std::ofstream quivers_metrics_file;
    std::ofstream output_trajectory_file;
    std::string output_initial_trajectory_filename_ue;
    std::string output_initial_trajectory_filename_twc;
@@ -1443,6 +1538,7 @@ private:
    std::vector<Eigen::Vector3f> pointcloud_;
    std::vector<Eigen::Vector3f> points_list;
    std::vector<Eigen::Vector3f> points_list_unnormalized;
+   std::vector<size_t> points_index_list;
    std::vector<Eigen::Vector3f> points_dir_list;
    std::vector<float> points_uncertainty_list;
    double ks=15;
@@ -1486,6 +1582,9 @@ private:
    bool log_jacobian=true;
    bool debug_log_enabled=false;
    std::string debug_log_path;
+   bool visible_feature_dump_enabled_ = false;
+   std::string visible_feature_dump_path_;
+   std::ofstream visible_feature_dump_file_;
    int step_norm_mode=kStepNormPoints;
    int fov_norm_mode=kFovNormPoints;
    int update_frame_mode=kUpdateWorld;

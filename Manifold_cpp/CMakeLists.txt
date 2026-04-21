@@ -8,6 +8,7 @@ add_subdirectory(monte_carlo)
 add_subdirectory(experiment_manager)
 add_subdirectory(trajectory_optimization_on_manifold)
 add_compile_options(-std=c++14) #optional to use c++11
+option(MANIFOLD_BUILD_LEGACY_APP "Build legacy manifold_test executable" OFF)
 
 
 find_package(Eigen3 REQUIRED)
@@ -36,17 +37,18 @@ endif()
 
 
 #add manifold executable
-
-add_executable(${PROJECT_NAME} "manifold_test.cpp") #The name of the cpp file and its path can vary
-target_include_directories(${PROJECT_NAME}
-   PRIVATE manifold point_cloud_data_loader monte_carlo experiment_manager
-)
-target_link_directories (${PROJECT_NAME}
- PRIVATE manifold point_cloud_data_loader experiment_manager
-)
-target_link_libraries(${PROJECT_NAME}
-   ${Eigen_LIBRARIES} manifold cloud_loader montecarlo e_manager
-   )
+if(MANIFOLD_BUILD_LEGACY_APP)
+  add_executable(${PROJECT_NAME} "manifold_test.cpp") #The name of the cpp file and its path can vary
+  target_include_directories(${PROJECT_NAME}
+     PRIVATE manifold point_cloud_data_loader monte_carlo experiment_manager
+  )
+  target_link_directories (${PROJECT_NAME}
+   PRIVATE manifold point_cloud_data_loader experiment_manager
+  )
+  target_link_libraries(${PROJECT_NAME}
+     ${Eigen_LIBRARIES} manifold cloud_loader montecarlo e_manager
+     )
+endif()
 
 
 
