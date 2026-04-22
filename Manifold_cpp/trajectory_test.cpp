@@ -272,6 +272,14 @@ void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	if (ReadEnvDouble("FOV_OPT_KS", &ks)) {
 		optimizer.set_ks(ks);
 	}
+	bool ks_from_visibility = false;
+	if (ReadEnvBool("FOV_OPT_KS_FROM_VISIBILITY", &ks_from_visibility)) {
+		optimizer.set_ks_from_visibility(ks_from_visibility);
+	}
+	float ks_transition_deg = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_KS_TRANSITION_DEG", &ks_transition_deg)) {
+		optimizer.set_ks_transition_deg(ks_transition_deg);
+	}
 	float vis_angle = 0.0f;
 	if (ReadEnvFloat("FOV_OPT_VIS_ANGLE_DEG", &vis_angle)) {
 		optimizer.set_visibility_angle_deg(vis_angle);
@@ -295,6 +303,66 @@ void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	std::vector<float> fov_schedule;
 	if (ReadEnvFloatList("FOV_OPT_FOV_SCHEDULE", &fov_schedule)) {
 		optimizer.set_fov_schedule_deg(fov_schedule);
+	}
+	const std::string step_norm_mode = ReadEnvString("FOV_OPT_STEP_NORM_MODE");
+	if (!step_norm_mode.empty()) {
+		optimizer.set_step_norm_mode(step_norm_mode);
+	}
+	const std::string fov_norm_mode = ReadEnvString("FOV_OPT_FOV_NORM_MODE");
+	if (!fov_norm_mode.empty()) {
+		optimizer.set_fov_norm_mode(fov_norm_mode);
+	}
+	const std::string update_frame_mode = ReadEnvString("FOV_OPT_UPDATE_FRAME_MODE");
+	if (!update_frame_mode.empty()) {
+		optimizer.set_update_frame_mode(update_frame_mode);
+	}
+	bool adaptive_step_enabled = false;
+	if (ReadEnvBool("FOV_OPT_ADAPTIVE_STEP_ENABLED", &adaptive_step_enabled)) {
+		optimizer.set_adaptive_step_enabled(adaptive_step_enabled);
+	}
+	float min_step_decay = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_MIN_STEP_DECAY", &min_step_decay)) {
+		optimizer.set_min_step_decay(min_step_decay);
+	}
+	float max_step_decay = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_MAX_STEP_DECAY", &max_step_decay)) {
+		optimizer.set_max_step_decay(max_step_decay);
+	}
+	float adapt_max_clip_thresh = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_MAX_CLIP_THRESH", &adapt_max_clip_thresh)) {
+		optimizer.set_adapt_max_clip_thresh(adapt_max_clip_thresh);
+	}
+	float adapt_min_clip_thresh = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_MIN_CLIP_THRESH", &adapt_min_clip_thresh)) {
+		optimizer.set_adapt_min_clip_thresh(adapt_min_clip_thresh);
+	}
+	float adapt_low_max_clip_thresh = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_LOW_MAX_CLIP_THRESH", &adapt_low_max_clip_thresh)) {
+		optimizer.set_adapt_low_max_clip_thresh(adapt_low_max_clip_thresh);
+	}
+	float adapt_low_min_clip_thresh = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_LOW_MIN_CLIP_THRESH", &adapt_low_min_clip_thresh)) {
+		optimizer.set_adapt_low_min_clip_thresh(adapt_low_min_clip_thresh);
+	}
+	float adapt_shrink_factor = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_SHRINK_FACTOR", &adapt_shrink_factor)) {
+		optimizer.set_adapt_shrink_factor(adapt_shrink_factor);
+	}
+	float adapt_grow_high_min_factor = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_GROW_HIGH_MIN_FACTOR", &adapt_grow_high_min_factor)) {
+		optimizer.set_adapt_grow_high_min_factor(adapt_grow_high_min_factor);
+	}
+	float adapt_grow_low_clip_factor = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_GROW_LOW_CLIP_FACTOR", &adapt_grow_low_clip_factor)) {
+		optimizer.set_adapt_grow_low_clip_factor(adapt_grow_low_clip_factor);
+	}
+	float adapt_scale_min = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_SCALE_MIN", &adapt_scale_min)) {
+		optimizer.set_adapt_scale_min(adapt_scale_min);
+	}
+	float adapt_scale_max = 0.0f;
+	if (ReadEnvFloat("FOV_OPT_ADAPT_SCALE_MAX", &adapt_scale_max)) {
+		optimizer.set_adapt_scale_max(adapt_scale_max);
 	}
 	bool log_jacobian = false;
 	if (ReadEnvBool("FOV_OPT_LOG_JACOBIAN", &log_jacobian)) {
