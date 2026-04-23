@@ -24,6 +24,9 @@
 #include <voxblox/core/esdf_map.h>
 #include <voxblox/io/layer_io.h>
 #include <voxblox/core/common.h>
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+#include <act_map/visibility_checker.h>
+#endif
 
 
 template <typename T> void print(T x)
@@ -54,6 +57,12 @@ public:
        kUpdateLegacy = 0,  // body-frame Jacobian with left-multiply (legacy/mismatched).
        kUpdateWorld = 1,   // world-frame Jacobian with left-multiply (fixed, default).
        kUpdateBody = 2,    // body-frame Jacobian with right-multiply (fixed).
+   };
+   enum OcclusionBackendMode {
+       kOcclusionAuto = 0,
+       kOcclusionNone = 1,
+       kOcclusionEsdf = 2,
+       kOcclusionDepthMap = 3,
    };
 
    myTrajectoryOptimizerOnManifold(std::string quivers_filename,
@@ -262,6 +271,23 @@ public:
        }
    }
 
+   void set_occlusion_backend(const std::string& mode) {
+       std::string lower = mode;
+       std::transform(lower.begin(), lower.end(), lower.begin(),
+                      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+       if (lower == "none" || lower == "off" || lower == "disabled") {
+           this->occlusion_backend_mode_ = kOcclusionNone;
+       } else if (lower == "esdf" || lower == "raycast" || lower == "online") {
+           this->occlusion_backend_mode_ = kOcclusionEsdf;
+       } else if (lower == "depthmap" || lower == "depth_map" ||
+                  lower == "visibility_map" || lower == "vismap") {
+           this->occlusion_backend_mode_ = kOcclusionDepthMap;
+       } else if (lower == "auto" || lower.empty()) {
+           this->occlusion_backend_mode_ = kOcclusionAuto;
+       }
+       this->invalidateVisibilityCache();
+   }
+
    bool loadEsdfMap(const std::string& esdf_file_path) {
        try {
            voxblox::Layer<voxblox::EsdfVoxel>::Ptr layer_ptr;
@@ -285,13 +311,41 @@ public:
        }
    }
 
-   size_t prefilterVisiblePoints() {
-       if (!this->esdf_loaded_) {
-           std::cerr << "Warning: ESDF map not loaded. Skipping occlusion filtering." << std::endl;
+   bool loadVisibilityDepthMap(const std::string& depth_map_file_path) {
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+       try {
+           act_map::DepthMapOptions options;
+           act_map::DepthMapPtr depth_map(new act_map::DepthMap(options));
+           depth_map->loadDepthLayer(depth_map_file_path);
+           act_map::VisibilityCheckerOptions checker_options;
+           checker_options.use_depth_layer_ = true;
+           checker_options.depth_layer_proto_fn_ = depth_map_file_path;
+           checker_options.min_dist = this->depth_map_config_.min_distance_m;
+           checker_options.max_dist = this->depth_map_config_.max_distance_m;
+           this->depth_map_visibility_checker_.reset(
+               new act_map::VisibilityChecker(checker_options, depth_map, nullptr));
+           this->depth_map_loaded_ = true;
+           this->depth_map_path_ = depth_map_file_path;
            this->invalidateVisibilityCache();
-           return this->valid_points.size();
+           std::cout << "Successfully loaded visibility depth map from: "
+                     << depth_map_file_path << std::endl;
+           return true;
+       } catch (const std::exception& e) {
+           std::cerr << "Exception loading visibility depth map: "
+                     << e.what() << std::endl;
+           this->depth_map_visibility_checker_.reset();
+           this->depth_map_loaded_ = false;
+           return false;
        }
+#else
+       (void)depth_map_file_path;
+       std::cerr << "Visibility depth-map backend requested but act_map support "
+                    "is not available in this build." << std::endl;
+       return false;
+#endif
+   }
 
+   size_t prefilterVisiblePoints() {
        if (this->trajectory.empty()) {
            std::cerr << "Warning: Trajectory is empty. Cannot pre-filter visibility." << std::endl;
            this->invalidateVisibilityCache();
@@ -304,52 +358,23 @@ public:
            return 0;
        }
 
-       this->visible_points_per_pose_.clear();
-       this->visible_points_per_pose_.resize(this->trajectory.size());
-
-       std::vector<char> seen(this->pointcloud_.size(), 0);
-       size_t unique_visible_count = 0;
-       size_t min_visible = this->valid_points.size();
-       size_t max_visible = 0;
-       size_t total_visible = 0;
-
-       for (size_t pose_idx = 0; pose_idx < this->trajectory.size(); ++pose_idx) {
-           const Eigen::Vector3f camera_pos = this->trajectory[pose_idx].get_position();
-           std::vector<size_t>& pose_visible = this->visible_points_per_pose_[pose_idx];
-           pose_visible.reserve(this->valid_points.size());
-
-           for (size_t idx : this->valid_points) {
-               if (idx >= this->pointcloud_.size()) {
-                   continue;
-               }
-               if (!this->isPointVisible(camera_pos, this->pointcloud_[idx])) {
-                   continue;
-               }
-               pose_visible.push_back(idx);
-               if (!seen[idx]) {
-                   seen[idx] = 1;
-                   unique_visible_count++;
-               }
-           }
-
-           min_visible = std::min(min_visible, pose_visible.size());
-           max_visible = std::max(max_visible, pose_visible.size());
-           total_visible += pose_visible.size();
+       if (!this->isOcclusionPrefilterEnabled()) {
+           std::cerr << "Warning: No occlusion backend is ready. Skipping occlusion filtering."
+                     << std::endl;
+           this->invalidateVisibilityCache();
+           return this->valid_points.size();
        }
 
-       this->visibility_cache_ready_ = true;
+       const int backend = this->GetEffectiveOcclusionBackend();
+       if (backend == kOcclusionDepthMap) {
+           return this->prefilterVisiblePointsWithDepthMap();
+       }
+       if (backend == kOcclusionEsdf) {
+           return this->prefilterVisiblePointsWithEsdf();
+       }
 
-       const double avg_visible =
-           this->trajectory.empty()
-               ? 0.0
-               : static_cast<double>(total_visible) / static_cast<double>(this->trajectory.size());
-       std::cout << "Per-pose visibility cache built from " << this->valid_points.size()
-                 << " landmarks: unique visible=" << unique_visible_count
-                 << ", avg/pose=" << avg_visible
-                 << ", min/pose=" << min_visible
-                 << ", max/pose=" << max_visible << std::endl;
-
-       return unique_visible_count;
+       this->invalidateVisibilityCache();
+       return this->valid_points.size();
    }
 
    void setEsdfConfig(float distance_threshold_m, bool use_interpolation = true) {
@@ -377,6 +402,52 @@ public:
 
    bool isEsdfLoaded() const {
        return this->esdf_loaded_;
+   }
+
+   void setVisibilityDepthMapRange(float min_dist_m, float max_dist_m) {
+       if (min_dist_m >= 0.0f) {
+           this->depth_map_config_.min_distance_m = min_dist_m;
+       }
+       if (max_dist_m > 0.0f) {
+           this->depth_map_config_.max_distance_m = max_dist_m;
+       }
+       if (this->depth_map_config_.max_distance_m <
+           this->depth_map_config_.min_distance_m) {
+           this->depth_map_config_.max_distance_m =
+               this->depth_map_config_.min_distance_m;
+       }
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+       if (this->depth_map_visibility_checker_) {
+           this->depth_map_visibility_checker_->options_.min_dist =
+               this->depth_map_config_.min_distance_m;
+           this->depth_map_visibility_checker_->options_.max_dist =
+               this->depth_map_config_.max_distance_m;
+       }
+#endif
+       this->invalidateVisibilityCache();
+   }
+
+   bool isVisibilityDepthMapLoaded() const {
+       return this->depth_map_loaded_;
+   }
+
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+   void setSharedVisibilityDepthMapChecker(
+       const act_map::VisibilityCheckerPtr& checker,
+       const std::string& depth_map_file_path = std::string()) {
+       this->depth_map_visibility_checker_ = checker;
+       this->depth_map_loaded_ = static_cast<bool>(checker);
+       this->depth_map_path_ = depth_map_file_path;
+       this->invalidateVisibilityCache();
+   }
+#endif
+
+   bool isOcclusionPrefilterEnabled() const {
+       return GetEffectiveOcclusionBackend() != kOcclusionNone;
+   }
+
+   std::string getEffectiveOcclusionBackendName() const {
+       return OcclusionBackendModeToString(GetEffectiveOcclusionBackend());
    }
 
    bool isPointVisible(const Eigen::Vector3f& camera_pos,
@@ -411,19 +482,7 @@ public:
        this->quivers_filename=quivers_filename;
 	   this->output_initial_trajectory_filename_ue = output_initial_trajectory_filename_ue;
        this->output_initial_trajectory_filename_twc = output_initial_trajectory_filename_twc;
-       if (!this->quivers_filename.empty()) {
-           this->initial_trajectory_file.open(this->quivers_filename);
-           if (this->initial_trajectory_file.is_open()) {
-               this->initial_trajectory_file
-                   << "# columns: x,y,z,dx,dy,dz,visible_count,visibility_score\n"
-                   << "# blocks: blank-line separated iterations\n";
-           }
-       }
-       this->maybe_open_visible_feature_dump_file();
-
-       if (!output_trajectory_filename.empty()) {
-	       this->output_trajectory_file.open(output_trajectory_filename);
-       }
+       this->output_trajectory_arrows_filename_ = output_trajectory_filename;
        this->output_trajectory_filename_ue= output_trajectory_filename_ue;
        this->output_trajectory_filename_twc= output_trajectory_filename_twc;
 
@@ -779,74 +838,94 @@ public:
        return exp_map;
    }
 
-   // set each cam pose as frame coordinate reference and express pointcould w.r.t that. 
-   void populate_local_indexes_for_pose(size_t pose_index){
-       const Eigen::Vector3f pos = this->trajectory[pose_index].get_position();
-       this->points_list.clear();
-       this->points_list_unnormalized.clear();
-       std::vector<Eigen::Vector3f> pointcloud_dir;
-       std::vector<float> pointcloud_uncertainty;
+private:
+   struct PosePointScanStats {
+       float closest = std::numeric_limits<float>::max();
+       float furthest = 0.0f;
+       float max_uncertainty = 0.0f;
+       size_t valid_point_count = 0;
+   };
 
-
-       if(this->use_direction||this->use_uncertainty){
-           this->points_dir_list.clear();
-           this->points_uncertainty_list.clear();
-           this->max_uncertainty = 0.0f;
-           pointcloud_dir=this->loader.get_pointcloud_dir();
-           pointcloud_uncertainty=this->loader.get_pointcloud_uncertainty();
+   void load_pose_point_attributes(std::vector<Eigen::Vector3f>* pointcloud_dir,
+                                   std::vector<float>* pointcloud_uncertainty) {
+       pointcloud_dir->clear();
+       pointcloud_uncertainty->clear();
+       if (!this->use_direction && !this->use_uncertainty) {
+           return;
        }
-       this->points_index_list.clear();
+       *pointcloud_dir = this->loader.get_pointcloud_dir();
+       *pointcloud_uncertainty = this->loader.get_pointcloud_uncertainty();
+   }
+
+   template <typename Func>
+   void for_each_pose_point(size_t pose_index,
+                            const std::vector<Eigen::Vector3f>& pointcloud_dir,
+                            const std::vector<float>& pointcloud_uncertainty,
+                            Func&& func) {
+       if (pose_index >= this->trajectory.size()) {
+           return;
+       }
+
+       const Eigen::Vector3f pos = this->trajectory[pose_index].get_position();
        const std::vector<size_t>& pose_valid_points = this->getValidPointsForPose(pose_index);
+       const Eigen::Vector3f zero_dir = Eigen::Vector3f::Zero();
 
-
-       this->closest=std::numeric_limits<float>::max();
-       this->furthest=0.0f;
-       for (size_t i:pose_valid_points){
-       //for (Eigen::Vector3f point: this->loader.get_pointcloud()){
-           // print_string("point");
-           // print_eigen_v(point);
-           if (i >= this->pointcloud_.size()) {
+       for (size_t point_index : pose_valid_points) {
+           if (point_index >= this->pointcloud_.size()) {
                continue;
            }
-           Eigen::Vector3f point_pos=this->pointcloud_[i]-pos;
-           // print_string("point_pos");
-           // print_eigen_v(point_pos);
-           const float point_distance = point_pos.norm();
+
+           const Eigen::Vector3f point_offset = this->pointcloud_[point_index] - pos;
+           const float point_distance = point_offset.norm();
            if (point_distance <= 1e-6f) {
                continue;
            }
-           if (point_distance>this->furthest)
-               this->furthest=point_distance;
-           if (point_distance<this->closest)
-               this->closest=point_distance;        
-           // print_string("point_pos");
-           // print_eigen_v(point_pos);
-          
-           this->points_list_unnormalized.push_back(point_pos);
-           point_pos=point_pos/point_distance; 
-           this->points_list.push_back(point_pos);
-           this->points_index_list.push_back(i);
 
-           if(this->use_direction||this->use_uncertainty){
-               Eigen::Vector3f point_dir = Eigen::Vector3f::Zero();
-               float point_uncertainty = 0.0f;
-               if (i < pointcloud_dir.size()) {
-                   point_dir = pointcloud_dir[i];
-               }
-               if (i < pointcloud_uncertainty.size()) {
-                   point_uncertainty = pointcloud_uncertainty[i];
-               }
-               if (point_uncertainty>this->max_uncertainty){
-                   this->max_uncertainty=point_uncertainty;
-               }
-               this->points_dir_list.push_back(point_dir);
-               this->points_uncertainty_list.push_back(point_uncertainty);
-           }
-       }
-       if (this->closest == std::numeric_limits<float>::max()) {
-           this->closest = 0.0f;
+           const Eigen::Vector3f& point_dir =
+               (point_index < pointcloud_dir.size()) ? pointcloud_dir[point_index] : zero_dir;
+           const float point_uncertainty =
+               (point_index < pointcloud_uncertainty.size()) ? pointcloud_uncertainty[point_index] : 0.0f;
+           func(point_index, point_offset, point_distance, point_dir, point_uncertainty);
        }
    }
+
+   PosePointScanStats compute_pose_point_scan_stats(
+       size_t pose_index, const std::vector<float>& pointcloud_uncertainty) {
+       PosePointScanStats stats;
+       if (pose_index >= this->trajectory.size()) {
+           stats.closest = 0.0f;
+           return stats;
+       }
+
+       const Eigen::Vector3f pos = this->trajectory[pose_index].get_position();
+       const std::vector<size_t>& pose_valid_points = this->getValidPointsForPose(pose_index);
+       for (size_t point_index : pose_valid_points) {
+           if (point_index >= this->pointcloud_.size()) {
+               continue;
+           }
+
+           const Eigen::Vector3f point_offset = this->pointcloud_[point_index] - pos;
+           const float point_distance = point_offset.norm();
+           if (point_distance <= 1e-6f) {
+               continue;
+           }
+
+           stats.closest = std::min(stats.closest, point_distance);
+           stats.furthest = std::max(stats.furthest, point_distance);
+           if (this->use_uncertainty && point_index < pointcloud_uncertainty.size()) {
+               stats.max_uncertainty =
+                   std::max(stats.max_uncertainty, pointcloud_uncertainty[point_index]);
+           }
+           ++stats.valid_point_count;
+       }
+
+       if (stats.closest == std::numeric_limits<float>::max()) {
+           stats.closest = 0.0f;
+       }
+       return stats;
+   }
+
+public:
 
 // rotational velocity constraint
    std::vector<Eigen::Vector3f> velocity_finite_differencing_jacobian(std::vector<PoseSE3> starting_trajectory){
@@ -895,26 +974,29 @@ public:
        if (pose_index >= this->trajectory.size()) {
            return visible_indices;
        }
-       this->populate_local_indexes_for_pose(pose_index);
-       if (this->points_list.empty()) {
-           return visible_indices;
-       }
-       visible_indices.reserve(this->points_list.size());
+
+       const std::vector<Eigen::Vector3f> empty_pointcloud_dir;
+       const std::vector<float> empty_pointcloud_uncertainty;
+
+       visible_indices.reserve(this->getValidPointsForPose(pose_index).size());
        const Eigen::Matrix3f R = this->trajectory[pose_index].get_rotation();
+       const Eigen::Matrix3f Rt = R.transpose();
        const float cos_alpha = std::cos(visibility_alpha_rad);
-       const size_t count =
-           std::min(this->points_list.size(), this->points_index_list.size());
-       for (size_t idx = 0; idx < count; ++idx) {
-           const Eigen::Vector3f& K_ = this->points_list[idx];
-           const float u = (K_.transpose()) * R * this->c;
-           if (u >= cos_alpha) {
-               visible_indices.push_back(this->points_index_list[idx]);
-           }
-       }
+
+       this->for_each_pose_point(
+           pose_index, empty_pointcloud_dir, empty_pointcloud_uncertainty,
+           [&](size_t point_index, const Eigen::Vector3f& point_offset, float point_distance,
+               const Eigen::Vector3f&, float) {
+               const Eigen::Vector3f K = Rt * (point_offset / point_distance);
+               if (K.dot(this->c) >= cos_alpha) {
+                   visible_indices.push_back(point_index);
+               }
+           });
        return visible_indices;
    }
 
    void write_arrow_to_file(Eigen::Vector3f position,Eigen::Vector3f ray_direction){
+       this->maybe_open_initial_trajectory_file();
        if (!this->initial_trajectory_file.is_open()) {
            return;
        }
@@ -922,6 +1004,7 @@ public:
     }
 
    void write_arrow_to_output_file(Eigen::Vector3f position,Eigen::Vector3f ray_direction){
+       this->maybe_open_output_trajectory_file();
        if (!this->output_trajectory_file.is_open()) {
            return;
        }
@@ -940,108 +1023,94 @@ public:
            <<std::endl;
    }
 
-   Eigen::Vector3f calculate_FOV_jacobian_for_pose(size_t pose_index,int iteration_count,
-                                                   float* visible_count = nullptr,
-                                                   float* visibility_score = nullptr){
-    this->populate_local_indexes_for_pose(pose_index);
-    Eigen::Matrix3f R=this->trajectory[pose_index].get_rotation();
-        Eigen::Vector3f aJ_l;
-        aJ_l<<0,0,0;
-        float residual=0.0;
-        int counter=0;
-        const double ks_iter = GetKsForIteration(iteration_count);
-        const float visibility_alpha = GetVisibilityAlpha(iteration_count);
-        const float cos_alpha = std::cos(visibility_alpha);
-        float vis_count_local = 0.0f;
-        float vis_score_local = 0.0f;
-        for(Eigen::Vector3f K_: this->points_list){
-            Eigen::Vector3f K=(K_.transpose())*R; //# this -R
-            float C1=this->c[0];  
-            float C2=this->c[1];
-            float C3=this->c[2];
-            float K1=K[0];
-            float K2=K[1];
-            float K3=K[2];  //NOTE: c nabayad R* this->c bashe inja ke mese paper beshe ? Na doroste
+   void exportInitialTrajectoryReference() {
+       saveTrajectoryAsUE_Format(this->trajectory, this->output_initial_trajectory_filename_ue);
+       saveTrajectoryAsTwcFormat(this->trajectory, this->output_initial_trajectory_filename_twc);
+   }
 
-            Eigen::Vector3f F_Jacobian=this->get_Jacobian_from_K_and_C(K1,K2,K3,C1,C2,C3); //jacobian function return c x k
-            Eigen::Vector3f J=F_Jacobian;
+   void exportOptimizedTrajectoryOutputs() {
+       if (this->output_trajectory_file.is_open()) {
+           this->output_trajectory_file.close();
+       }
+       for (const PoseSE3& pose : this->trajectory) {
+           Eigen::Matrix3f R = pose.get_rotation();
+           Eigen::Vector3f v__ = R * this->c;
+           this->write_arrow_to_output_file(pose.get_position(), v__);
+       }
+       if (this->output_trajectory_file.is_open()) {
+           this->output_trajectory_file.flush();
+           this->output_trajectory_file.close();
+       }
+       saveTrajectoryAsUE_Format(this->trajectory, this->output_trajectory_filename_ue);
+       saveTrajectoryAsTwcFormat(this->trajectory, this->output_trajectory_filename_twc);
+   }
 
-            const float u = (K_.transpose())*(R)*this->c;
-            if (visible_count) {
-                if (u >= cos_alpha) {
-                    vis_count_local += 1.0f;
-                }
-            }
-            if (visibility_score) {
-                float score = 0.0f;
-                if (this->optimize_visibility_sigmoid) {
-                    const float w = (-1.0f) * static_cast<float>(ks_iter) * (u - cos_alpha);
-                    score = 1.0f / (1.0f + std::exp(w));
-                } else {
-                    score = (u >= cos_alpha) ? 1.0f : 0.0f;
-                }
-                vis_score_local += score;
-            }
-        
-            if (this->optimize_visibility_sigmoid==true){   //optimize visibility sigmoid
-                float KTRC;
-                KTRC=u;
-                residual=residual+KTRC;
+   Eigen::Vector3f calculate_FOV_jacobian_for_pose(size_t pose_index,int iteration_count){
+       std::vector<Eigen::Vector3f> pointcloud_dir;
+       std::vector<float> pointcloud_uncertainty;
+       this->load_pose_point_attributes(&pointcloud_dir, &pointcloud_uncertainty);
 
-                float w=(-1.0f)*static_cast<float>(ks_iter)*(u-cos_alpha);
-                float v=exp(w);
-                float coeff=(-1.0f)*(pow((1+v),(-2))*v*(0.0f-static_cast<float>(ks_iter)));
-                F_Jacobian=coeff*J;
-            }
+       const PosePointScanStats stats =
+           this->compute_pose_point_scan_stats(pose_index, pointcloud_uncertainty);
+       if (stats.valid_point_count == 0) {
+           return Eigen::Vector3f::Zero();
+       }
 
-                // if self.use_direction==True:
-            float alpha=4.0;
-            if(this->use_direction){
+       const Eigen::Matrix3f R = this->trajectory[pose_index].get_rotation();
+       const Eigen::Matrix3f Rt = R.transpose();
+       const float ks_iter = static_cast<float>(GetKsForIteration(iteration_count));
+       const float visibility_alpha = GetVisibilityAlpha(iteration_count);
+       const float cos_alpha = std::cos(visibility_alpha);
+       const float distance_span = std::max(1e-6f, stats.furthest - stats.closest);
+       const float max_uncertainty = std::max(1e-6f, stats.max_uncertainty);
+       const bool need_visible_norm = (this->fov_norm_mode == kFovNormVisible);
 
-                //  direction_dot=np.matrix(K)*np.matrix(self.direction_list[kk]).transpose()
-                float direction_dot=(K.transpose()*this->points_dir_list[counter]);
-                //  print("final coeff",1.0-np.abs(direction_dot[0,0]))
-                if(this->DEBUG){
-                    // std::cout<<"direction_dot is " <<direction_dot<<std::endl;
-                }
-                //  alpha=alpha*(1.0-np.abs(direction_dot[0,0]))
-                alpha=alpha*(1.0-fabs(direction_dot));
-                F_Jacobian=F_Jacobian*alpha;
-            }
+       Eigen::Vector3f total_jacobian = Eigen::Vector3f::Zero();
+       float visible_count = 0.0f;
+       this->for_each_pose_point(
+           pose_index, pointcloud_dir, pointcloud_uncertainty,
+           [&](size_t, const Eigen::Vector3f& point_offset, float point_distance,
+               const Eigen::Vector3f& point_dir, float point_uncertainty) {
+               const Eigen::Vector3f K_unit = point_offset / point_distance;
+               const Eigen::Vector3f K = Rt * K_unit;
+               Eigen::Vector3f point_jacobian =
+                   this->get_Jacobian_from_K_and_C(K.x(), K.y(), K.z(),
+                                                   this->c.x(), this->c.y(), this->c.z());
 
-            float uncertainty_alpha=3;
-            if(this->use_uncertainty){
-                    float point_uncertainty=this->points_uncertainty_list[counter];
-                    const float max_uncertainty =
-                        std::max(1e-6f, this->max_uncertainty);
-                    uncertainty_alpha=1.0f*point_uncertainty/max_uncertainty;
-                    F_Jacobian=F_Jacobian*uncertainty_alpha;
-            }
+               const float u = K.dot(this->c);
+               if (need_visible_norm && u >= cos_alpha) {
+                   visible_count += 1.0f;
+               }
 
-                const float distance=this->points_list_unnormalized[counter].norm();
-                const float distance_span = std::max(1e-6f, this->furthest-this->closest);
-                const float distance_weight=1.0f-(distance-this->closest)/distance_span;
-                F_Jacobian=F_Jacobian*distance_weight;
+               if (this->optimize_visibility_sigmoid) {
+                   const float w = (-1.0f) * ks_iter * (u - cos_alpha);
+                   const float v = std::exp(w);
+                   const float inv_one_plus_v = 1.0f / (1.0f + v);
+                   point_jacobian *= ks_iter * v * inv_one_plus_v * inv_one_plus_v;
+               }
 
-        Eigen::Vector3f aJ=F_Jacobian;
-        aJ_l=aJ_l+aJ;
-        counter++;
-        }
-        if (visible_count) {
-            *visible_count = vis_count_local;
-        }
-        if (visibility_score) {
-            *visibility_score = vis_score_local;
-        }
-        if (this->fov_norm_mode == kFovNormPoints) {
-            const float denom = std::max(1.0f, static_cast<float>(this->points_list.size()));
-            aJ_l = 5* aJ_l / (denom *M_PI);  //changed 
-        } else if (this->fov_norm_mode == kFovNormVisible) {
-            const float denom = std::max(1.0f, vis_count_local);
-            aJ_l = aJ_l / denom;
-        }
-        return aJ_l;
-    }
+               if (this->use_direction) {
+                   const float direction_dot = K.dot(point_dir);
+                   point_jacobian *= 4.0f * (1.0f - std::fabs(direction_dot));
+               }
+
+               if (this->use_uncertainty) {
+                   point_jacobian *= point_uncertainty / max_uncertainty;
+               }
+
+               const float distance_weight =
+                   1.0f - (point_distance - stats.closest) / distance_span;
+               total_jacobian += point_jacobian * distance_weight;
+           });
+
+       if (this->fov_norm_mode == kFovNormPoints) {
+           const float denom = std::max(1.0f, static_cast<float>(stats.valid_point_count));
+           total_jacobian = 5.0f * total_jacobian / (denom * static_cast<float>(M_PI));
+       } else if (this->fov_norm_mode == kFovNormVisible) {
+           total_jacobian /= std::max(1.0f, visible_count);
+       }
+       return total_jacobian;
+   }
 
    void calculate_visibility_metrics_for_pose(size_t pose_index, int iteration_count,
                                               float visibility_alpha_rad,
@@ -1051,30 +1120,38 @@ public:
        if (!visible_count && !visibility_score) {
            return;
        }
-       this->populate_local_indexes_for_pose(pose_index);
-       Eigen::Matrix3f R = this->trajectory[pose_index].get_rotation();
-       const double ks_iter =
-           (visibility_ks > 0.0) ? visibility_ks : GetKsForIteration(iteration_count);
+       const std::vector<Eigen::Vector3f> empty_pointcloud_dir;
+       const std::vector<float> empty_pointcloud_uncertainty;
+
+       const Eigen::Matrix3f R = this->trajectory[pose_index].get_rotation();
+       const Eigen::Matrix3f Rt = R.transpose();
+       const float ks_iter = static_cast<float>(
+           (visibility_ks > 0.0) ? visibility_ks : GetKsForIteration(iteration_count));
        const float cos_alpha = std::cos(visibility_alpha_rad);
        float vis_count_local = 0.0f;
        float vis_score_local = 0.0f;
-       for (Eigen::Vector3f K_ : this->points_list) {
-           const float u = (K_.transpose()) * R * this->c;
-           if (visible_count && u >= cos_alpha) {
-               vis_count_local += 1.0f;
-           }
-           if (visibility_score) {
-               float score = 0.0f;
-               if (this->optimize_visibility_sigmoid) {
-                   const float w =
-                       (-1.0f) * static_cast<float>(ks_iter) * (u - cos_alpha);
-                   score = 1.0f / (1.0f + std::exp(w));
-               } else {
-                   score = (u >= cos_alpha) ? 1.0f : 0.0f;
+
+       this->for_each_pose_point(
+           pose_index, empty_pointcloud_dir, empty_pointcloud_uncertainty,
+           [&](size_t, const Eigen::Vector3f& point_offset, float point_distance,
+               const Eigen::Vector3f&, float) {
+               const Eigen::Vector3f K = Rt * (point_offset / point_distance);
+               const float u = K.dot(this->c);
+               if (visible_count && u >= cos_alpha) {
+                   vis_count_local += 1.0f;
                }
-               vis_score_local += score;
-           }
-       }
+               if (visibility_score) {
+                   float score = 0.0f;
+                   if (this->optimize_visibility_sigmoid) {
+                       const float w = (-1.0f) * ks_iter * (u - cos_alpha);
+                       score = 1.0f / (1.0f + std::exp(w));
+                   } else {
+                       score = (u >= cos_alpha) ? 1.0f : 0.0f;
+                   }
+                   vis_score_local += score;
+               }
+           });
+
        if (visible_count) {
            *visible_count = vis_count_local;
        }
@@ -1085,17 +1162,18 @@ public:
 
    void optimize(bool write_to_file){
        Eigen::Matrix3f R;
-       Eigen::Vector3f v__, v_, v;
-       this->maybe_open_visible_feature_dump_file();
-       if (this->esdf_loaded_ && !this->visibility_cache_ready_) {
+       Eigen::Vector3f v_;
+       if (this->isOcclusionPrefilterEnabled() && !this->visibility_cache_ready_) {
            this->prefilterVisiblePoints();
        }
-       saveTrajectoryAsUE_Format(this->trajectory, this->output_initial_trajectory_filename_ue); //should match stamped_twc_ue that we read as input(checking purpose) 
-       saveTrajectoryAsTwcFormat(this->trajectory, this->output_initial_trajectory_filename_twc); //should match stamped_twc that we read as input(checking purpose) 
+       if (write_to_file) {
+           this->maybe_open_visible_feature_dump_file();
+           this->exportInitialTrajectoryReference();
+       }
 
        std::ofstream debug_log;
        bool debug_log_active = false;
-       if (this->debug_log_enabled) {
+       if (write_to_file && this->debug_log_enabled) {
            std::string log_path;
            if (!this->debug_log_path.empty()) {
                if (HasPathSeparator(this->debug_log_path)) {
@@ -1130,8 +1208,6 @@ public:
            }
        }
 
-       const float points_count =
-           std::max(1.0f, static_cast<float>(this->valid_points.size()));
        float prev_avg_jac_norm = 1.0f;
        float adaptive_step_scale = 1.0f;
        for (int i =0;i<this->max_iteration;i++){
@@ -1164,16 +1240,22 @@ public:
 			//optimization
 			for (int j =0;j<trajecotry_jacobian.size();j++){
 				Eigen::Vector3f FOV_Jacobian,combined_Jacobian;
-				float vis_count = 0.0f;
-				float vis_score = 0.0f;
-				FOV_Jacobian=calculate_FOV_jacobian_for_pose(static_cast<size_t>(j + 1),i,
-                                                        &vis_count, &vis_score);
+                const size_t pose_index = static_cast<size_t>(j + 1);
+				FOV_Jacobian=calculate_FOV_jacobian_for_pose(pose_index, i);
                 float norm_scale = norm_scale_iter;
                 float smooth_scale = 0.5f;
                 const Eigen::Vector3f traj_scaled =
                     this->trajectory_jacobian_step * smooth_scale * trajecotry_jacobian[j];
 				combined_Jacobian = FOV_Jacobian + traj_scaled;
 				R = trajectory[j+1].get_rotation();
+
+                float vis_count_sched = 0.0f;
+                float vis_score_sched = 0.0f;
+                const float alpha_rad = debug_log_active ? GetVisibilityAlpha(i) : 0.0f;
+                if (debug_log_active) {
+                    this->calculate_visibility_metrics_for_pose(
+                        pose_index, i, alpha_rad, &vis_count_sched, &vis_score_sched);
+                }
 
 				const float jacobian_norm = combined_Jacobian.norm();
 				float base_step = 0.0f;
@@ -1220,13 +1302,12 @@ public:
                     float vis_score_post = 0.0f;
                     float vis_count_fixed = 0.0f;
                     float vis_score_fixed = 0.0f;
-                    const float alpha_rad = GetVisibilityAlpha(i);
                     this->calculate_visibility_metrics_for_pose(
-                        static_cast<size_t>(j + 1), i, alpha_rad,
+                        pose_index, i, alpha_rad,
                         &vis_count_post, &vis_score_post);
                     constexpr float kFixedAlphaRad = 30.0f * static_cast<float>(M_PI) / 180.0f;
                     this->calculate_visibility_metrics_for_pose(
-                        static_cast<size_t>(j + 1), i, kFixedAlphaRad,
+                        pose_index, i, kFixedAlphaRad,
                         &vis_count_fixed, &vis_score_fixed);
 
                    const Eigen::Vector3f pos = this->trajectory[j+1].get_position();
@@ -1245,7 +1326,7 @@ public:
                              << (clipped_min ? 1 : 0) << "," << (clipped_max ? 1 : 0) << "," << adaptive_step_scale << ","
                               << min_step_iter << "," << max_step_iter << "," << norm_scale << ","
                               << alpha_deg << ","
-                              << vis_count << "," << vis_score << ","
+                              << vis_count_sched << "," << vis_score_sched << ","
                               << vis_count_post << "," << vis_score_post << ","
                               << vis_count_fixed << "," << vis_score_fixed
                               << std::endl;
@@ -1253,6 +1334,7 @@ public:
            }
 
            if (write_to_file){
+               this->maybe_open_initial_trajectory_file();
                if (this->initial_trajectory_file.is_open()) {
                    if (i > 0) {
                        this->initial_trajectory_file << std::endl;
@@ -1324,23 +1406,31 @@ public:
 
 
        if (write_to_file){
-           for (PoseSE3 pose:this->trajectory){
-               Eigen::Matrix3f R=pose.get_rotation();
-               v__=this->c;
-               v__=R*v__;
-
-
-               // std::cout<<"v__"<<v__ <<std::endl;
-               this->write_arrow_to_output_file(pose.get_position(),v__);
-
-           }
-           //NOTE: added
-           saveTrajectoryAsUE_Format(this->trajectory, this->output_trajectory_filename_ue);
-           saveTrajectoryAsTwcFormat(this->trajectory, this->output_trajectory_filename_twc);
+           this->exportOptimizedTrajectoryOutputs();
        }
    }
 
 private:
+   void maybe_open_initial_trajectory_file() {
+       if (this->quivers_filename.empty() || this->initial_trajectory_file.is_open()) {
+           return;
+       }
+       this->initial_trajectory_file.open(this->quivers_filename);
+       if (this->initial_trajectory_file.is_open()) {
+           this->initial_trajectory_file
+               << "# columns: x,y,z,dx,dy,dz,visible_count,visibility_score\n"
+               << "# blocks: blank-line separated iterations\n";
+       }
+   }
+
+   void maybe_open_output_trajectory_file() {
+       if (this->output_trajectory_arrows_filename_.empty() ||
+           this->output_trajectory_file.is_open()) {
+           return;
+       }
+       this->output_trajectory_file.open(this->output_trajectory_arrows_filename_);
+   }
+
    float GetMetricVisibilityAlpha() const {
        if (!this->fov_schedule_rad.empty()) {
            return this->fov_schedule_rad.back();
@@ -1400,6 +1490,171 @@ private:
 
    double GetKsForIteration(int iteration_count) const {
        return GetKsForVisibilityAlpha(GetVisibilityAlpha(iteration_count));
+   }
+
+   static const char* OcclusionBackendModeToString(int mode) {
+       switch (mode) {
+           case kOcclusionEsdf:
+               return "esdf";
+           case kOcclusionDepthMap:
+               return "depthmap";
+           case kOcclusionNone:
+           default:
+               return "none";
+       }
+   }
+
+   int GetEffectiveOcclusionBackend() const {
+       if (this->occlusion_backend_mode_ == kOcclusionNone) {
+           return kOcclusionNone;
+       }
+       if (this->occlusion_backend_mode_ == kOcclusionEsdf) {
+           return this->esdf_loaded_ ? kOcclusionEsdf : kOcclusionNone;
+       }
+       if (this->occlusion_backend_mode_ == kOcclusionDepthMap) {
+           return this->depth_map_loaded_ ? kOcclusionDepthMap : kOcclusionNone;
+       }
+       if (this->esdf_loaded_) {
+           return kOcclusionEsdf;
+       }
+       if (this->depth_map_loaded_) {
+           return kOcclusionDepthMap;
+       }
+       return kOcclusionNone;
+   }
+
+   void logVisibilityCacheStats(size_t unique_visible_count,
+                                size_t min_visible,
+                                size_t max_visible,
+                                size_t total_visible) const {
+       const double avg_visible =
+           this->trajectory.empty()
+               ? 0.0
+               : static_cast<double>(total_visible) /
+                     static_cast<double>(this->trajectory.size());
+       std::cout << "Per-pose visibility cache built using "
+                 << OcclusionBackendModeToString(GetEffectiveOcclusionBackend())
+                 << " from " << this->valid_points.size()
+                 << " landmarks: unique visible=" << unique_visible_count
+                 << ", avg/pose=" << avg_visible
+                 << ", min/pose=" << min_visible
+                 << ", max/pose=" << max_visible << std::endl;
+   }
+
+   size_t prefilterVisiblePointsWithEsdf() {
+       if (!this->esdf_loaded_) {
+           std::cerr << "Warning: ESDF map not loaded. Skipping ESDF occlusion filtering."
+                     << std::endl;
+           this->invalidateVisibilityCache();
+           return this->valid_points.size();
+       }
+
+       this->visible_points_per_pose_.clear();
+       this->visible_points_per_pose_.resize(this->trajectory.size());
+
+       std::vector<char> seen(this->pointcloud_.size(), 0);
+       size_t unique_visible_count = 0;
+       size_t min_visible = this->valid_points.size();
+       size_t max_visible = 0;
+       size_t total_visible = 0;
+
+       for (size_t pose_idx = 0; pose_idx < this->trajectory.size(); ++pose_idx) {
+           const Eigen::Vector3f camera_pos = this->trajectory[pose_idx].get_position();
+           std::vector<size_t>& pose_visible = this->visible_points_per_pose_[pose_idx];
+           pose_visible.reserve(this->valid_points.size());
+
+           for (size_t idx : this->valid_points) {
+               if (idx >= this->pointcloud_.size()) {
+                   continue;
+               }
+               if (!this->isPointVisible(camera_pos, this->pointcloud_[idx])) {
+                   continue;
+               }
+               pose_visible.push_back(idx);
+               if (!seen[idx]) {
+                   seen[idx] = 1;
+                   ++unique_visible_count;
+               }
+           }
+
+           min_visible = std::min(min_visible, pose_visible.size());
+           max_visible = std::max(max_visible, pose_visible.size());
+           total_visible += pose_visible.size();
+       }
+
+       this->visibility_cache_ready_ = true;
+       this->logVisibilityCacheStats(unique_visible_count, min_visible, max_visible,
+                                     total_visible);
+       return unique_visible_count;
+   }
+
+   size_t prefilterVisiblePointsWithDepthMap() {
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+       if (!this->depth_map_loaded_ || !this->depth_map_visibility_checker_) {
+           std::cerr << "Warning: visibility depth map not loaded. Skipping depth-map "
+                        "occlusion filtering." << std::endl;
+           this->invalidateVisibilityCache();
+           return this->valid_points.size();
+       }
+
+       this->visible_points_per_pose_.clear();
+       this->visible_points_per_pose_.resize(this->trajectory.size());
+
+       std::vector<char> seen(this->pointcloud_.size(), 0);
+       size_t unique_visible_count = 0;
+       size_t min_visible = this->valid_points.size();
+       size_t max_visible = 0;
+       size_t total_visible = 0;
+       const rpg::PositionVec empty_view_dirs;
+
+       for (size_t pose_idx = 0; pose_idx < this->trajectory.size(); ++pose_idx) {
+           rpg::PositionVec candidate_points;
+           std::vector<size_t> candidate_indices;
+           candidate_points.reserve(this->valid_points.size());
+           candidate_indices.reserve(this->valid_points.size());
+
+           for (size_t idx : this->valid_points) {
+               if (idx >= this->pointcloud_.size()) {
+                   continue;
+               }
+               candidate_points.emplace_back(this->pointcloud_[idx].cast<double>());
+               candidate_indices.push_back(idx);
+           }
+
+           act_map::VisIdx visible_local_idx;
+           this->depth_map_visibility_checker_->getVisibleIdx(
+               this->trajectory[pose_idx].get_position().cast<double>(),
+               candidate_points, empty_view_dirs, &visible_local_idx);
+
+           std::vector<size_t>& pose_visible = this->visible_points_per_pose_[pose_idx];
+           pose_visible.reserve(visible_local_idx.size());
+           for (size_t local_idx : visible_local_idx) {
+               if (local_idx >= candidate_indices.size()) {
+                   continue;
+               }
+               const size_t point_idx = candidate_indices[local_idx];
+               pose_visible.push_back(point_idx);
+               if (!seen[point_idx]) {
+                   seen[point_idx] = 1;
+                   ++unique_visible_count;
+               }
+           }
+
+           min_visible = std::min(min_visible, pose_visible.size());
+           max_visible = std::max(max_visible, pose_visible.size());
+           total_visible += pose_visible.size();
+       }
+
+       this->visibility_cache_ready_ = true;
+       this->logVisibilityCacheStats(unique_visible_count, min_visible, max_visible,
+                                     total_visible);
+       return unique_visible_count;
+#else
+       std::cerr << "Warning: visibility depth-map backend is unavailable in this build."
+                 << std::endl;
+       this->invalidateVisibilityCache();
+       return this->valid_points.size();
+#endif
    }
 
    bool checkVisibilityEsdf(const Eigen::Vector3f& camera_pos,
@@ -1529,6 +1784,7 @@ private:
    std::string quivers_filename ;
    std::ofstream initial_trajectory_file;
    std::ofstream output_trajectory_file;
+   std::string output_trajectory_arrows_filename_;
    std::string output_initial_trajectory_filename_ue;
    std::string output_initial_trajectory_filename_twc;
    std::string output_trajectory_filename_ue;
@@ -1536,11 +1792,6 @@ private:
    int max_iteration=30;
    CloudLoader loader;
    std::vector<Eigen::Vector3f> pointcloud_;
-   std::vector<Eigen::Vector3f> points_list;
-   std::vector<Eigen::Vector3f> points_list_unnormalized;
-   std::vector<size_t> points_index_list;
-   std::vector<Eigen::Vector3f> points_dir_list;
-   std::vector<float> points_uncertainty_list;
    double ks=15;
    bool ks_from_visibility=false;
    float ks_transition_deg=0.0f;
@@ -1573,11 +1824,23 @@ private:
    voxblox::EsdfMap::Ptr esdf_map_;
    bool esdf_loaded_ = false;
    std::string esdf_map_path_;
+   int occlusion_backend_mode_ = kOcclusionAuto;
+
+   struct DepthMapConfig {
+       float min_distance_m = 0.0f;
+       float max_distance_m = std::numeric_limits<float>::infinity();
+   };
+
+   DepthMapConfig depth_map_config_;
+   bool depth_map_loaded_ = false;
+   std::string depth_map_path_;
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+   act_map::VisibilityCheckerPtr depth_map_visibility_checker_;
+#endif
 
 
    bool use_uncertainty=false;
    bool use_direction=false;
-   float max_uncertainty=0;
    bool DEBUG=false;
    bool log_jacobian=true;
    bool debug_log_enabled=false;
@@ -1605,10 +1868,6 @@ private:
    float adapt_scale_min=0.10f;
    float adapt_scale_max=10.0f;
    std::vector<float> fov_schedule_rad;
-
-
-   float closest;
-   float furthest;
 
    static std::string DirName(const std::string& path) {
        const std::string::size_type pos = path.find_last_of("/\\");

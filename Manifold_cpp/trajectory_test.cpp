@@ -3,10 +3,13 @@
 // #include <monte_carlo.h>
 // #include <trajectory_optimizer.h>
 #include <trajectory_optimizer_copy.h>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <limits>
+#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -262,6 +265,14 @@ std::string ResolvePointCloudPath(const std::string& input_dir,
 	return candidates.front();
 }
 
+std::string ResolvePointCloudPath(const std::string& input_dir,
+	                               const std::string& explicit_path) {
+	if (!explicit_path.empty()) {
+		return explicit_path;
+	}
+	return ResolvePointCloudPath(input_dir, 0, nullptr);
+}
+
 void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	int max_iter = 0;
 	if (ReadEnvInt("FOV_OPT_MAX_ITER", &max_iter) ||
@@ -368,6 +379,15 @@ void ApplyEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 	if (ReadEnvBool("FOV_OPT_LOG_JACOBIAN", &log_jacobian)) {
 		optimizer.set_log_jacobian(log_jacobian);
 	}
+	bool debug_log_enabled = false;
+	if (ReadEnvBool("FOV_OPT_DEBUG_LOG_ENABLED", &debug_log_enabled) ||
+	    ReadEnvBool("FOV_OPT_DEBUG_LOG", &debug_log_enabled)) {
+		optimizer.set_debug_log_enabled(debug_log_enabled);
+	}
+	const std::string debug_log_path = ReadEnvString("FOV_OPT_DEBUG_LOG_PATH");
+	if (!debug_log_path.empty()) {
+		optimizer.set_debug_log_path(debug_log_path);
+	}
 }
 
 void ApplyEsdfEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
@@ -394,6 +414,25 @@ void ApplyEsdfEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
 		endpoint_margin, unknown_is_occluded);
 }
 
+void ApplyOcclusionBackendEnvOverrides(myTrajectoryOptimizerOnManifold& optimizer) {
+	const std::string backend = ReadEnvString("FOV_OPT_OCCLUSION_BACKEND");
+	if (!backend.empty()) {
+		optimizer.set_occlusion_backend(backend);
+	}
+
+	float min_dist = 0.0f;
+	float max_dist = std::numeric_limits<float>::infinity();
+	const bool has_min_dist =
+		ReadEnvFloat("FOV_OPT_VISMAP_MIN_DIST", &min_dist) ||
+		ReadEnvFloat("FOV_OPT_DEPTHMAP_MIN_DIST", &min_dist);
+	const bool has_max_dist =
+		ReadEnvFloat("FOV_OPT_VISMAP_MAX_DIST", &max_dist) ||
+		ReadEnvFloat("FOV_OPT_DEPTHMAP_MAX_DIST", &max_dist);
+	if (has_min_dist || has_max_dist) {
+		optimizer.setVisibilityDepthMapRange(min_dist, max_dist);
+	}
+}
+
 void ApplyVisibleFeatureDumpOverride(myTrajectoryOptimizerOnManifold& optimizer,
 	                                 const std::string& default_path) {
 	bool dump_visible_features = false;
@@ -407,22 +446,114 @@ void ApplyVisibleFeatureDumpOverride(myTrajectoryOptimizerOnManifold& optimizer,
 	}
 	optimizer.set_visible_feature_dump_path(dump_path);
 }
-}  // namespace
 
-int main(int argc, char *argv[]){
-	if (argc < 3 || argc > 5) {
-		return 0;
-	}
-	std::string input_dir(argv[1]);
-	std::string output_dir(argv[2]);
+struct JobRequest {
+	std::string input_dir;
+	std::string output_dir;
 	bool along_path = false;
-	if (argc >= 4) {
-		along_path = (std::stoi(argv[3]) != 0);
+	std::string pointcloud_path;
+	bool warm_start = false;
+	std::string warm_start_file;
+};
+
+struct JobTimingSummary {
+	double optimization_core_ms = 0.0;
+	double occlusion_prefilter_ms = 0.0;
+	double esdf_prefilter_ms = 0.0;
+	double depthmap_prefilter_ms = 0.0;
+	double total_measured_ms = 0.0;
+	std::string prefilter_backend = "none";
+};
+
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+struct SharedResources {
+	act_map::VisibilityCheckerPtr depth_map_visibility_checker;
+	std::string depth_map_path;
+};
+
+bool InitializeSharedResources(SharedResources* resources) {
+	if (!resources) {
+		return false;
+	}
+	std::string depth_map_path = ReadEnvString("FOV_OPT_VISIBILITY_DEPTHMAP_PATH");
+	if (depth_map_path.empty()) {
+		depth_map_path = ReadEnvString("FOV_OPT_DEPTHMAP_PATH");
+	}
+	if (depth_map_path.empty()) {
+		return true;
 	}
 
-	std::string output_pointcloud_file(JoinPath(output_dir, "trajectory_pointcloud.csv"));
-	std::string input_file = ResolvePointCloudPath(input_dir, argc, argv);
+	float min_dist = 0.0f;
+	float max_dist = std::numeric_limits<float>::infinity();
+	ReadEnvFloat("FOV_OPT_VISMAP_MIN_DIST", &min_dist) ||
+	    ReadEnvFloat("FOV_OPT_DEPTHMAP_MIN_DIST", &min_dist);
+	ReadEnvFloat("FOV_OPT_VISMAP_MAX_DIST", &max_dist) ||
+	    ReadEnvFloat("FOV_OPT_DEPTHMAP_MAX_DIST", &max_dist);
 
+	try {
+		act_map::DepthMapOptions options;
+		act_map::DepthMapPtr depth_map(new act_map::DepthMap(options));
+		depth_map->loadDepthLayer(depth_map_path);
+		act_map::VisibilityCheckerOptions checker_options;
+		checker_options.use_depth_layer_ = true;
+		checker_options.depth_layer_proto_fn_ = depth_map_path;
+		checker_options.min_dist = min_dist;
+		checker_options.max_dist = max_dist;
+		resources->depth_map_visibility_checker.reset(
+		    new act_map::VisibilityChecker(checker_options, depth_map, nullptr));
+		resources->depth_map_path = depth_map_path;
+		std::cerr << "Preloaded shared visibility depth map from: "
+		          << depth_map_path << std::endl;
+		return true;
+	} catch (const std::exception& e) {
+		std::cerr << "Failed to preload visibility depth map: " << e.what()
+		          << std::endl;
+		return false;
+	}
+}
+#else
+struct SharedResources {
+};
+
+bool InitializeSharedResources(SharedResources* /*resources*/) {
+	return true;
+}
+#endif
+
+bool ParseServerJobRequest(const std::string& line, JobRequest* job) {
+	if (!job) {
+		return false;
+	}
+	std::vector<std::string> fields;
+	std::stringstream ss(line);
+	std::string token;
+	while (std::getline(ss, token, '\t')) {
+		fields.push_back(token);
+	}
+	if (fields.size() < 5 || fields[0] != "JOB") {
+		return false;
+	}
+	job->input_dir = fields[1];
+	job->output_dir = fields[2];
+	job->along_path = (fields[3] == "1" || fields[3] == "true");
+	job->pointcloud_path = fields[4];
+	if (fields.size() >= 6) {
+		job->warm_start = (fields[5] == "1" || fields[5] == "true");
+	}
+	if (fields.size() >= 7) {
+		job->warm_start_file = fields[6];
+	}
+	return true;
+}
+
+int RunOptimizationJob(const JobRequest& job, const SharedResources& shared_resources,
+	                   JobTimingSummary* timing_summary) {
+	if (timing_summary) {
+		*timing_summary = JobTimingSummary();
+	}
+
+	std::string output_pointcloud_file(JoinPath(job.output_dir, "trajectory_pointcloud.csv"));
+	std::string input_file = ResolvePointCloudPath(job.input_dir, job.pointcloud_path);
 
 	std::string input_trajectory_file;
 	std::string output_trajectory_file;
@@ -434,11 +565,11 @@ int main(int argc, char *argv[]){
 	std::string output_visible_features_file;
 	std::string generated_input_trajectory_file;
 
-	CleanupLegacyOutputFiles(output_dir);
+	CleanupLegacyOutputFiles(job.output_dir);
 
-	if (along_path) {
-		const std::string base_twc = JoinPath(input_dir, "stamped_Twc.txt");
-		const std::string generated_twc = JoinPath(output_dir, ".input_stamped_Twc.txt");
+	if (job.along_path) {
+		const std::string base_twc = JoinPath(job.input_dir, "stamped_Twc.txt");
+		const std::string generated_twc = JoinPath(job.output_dir, ".input_stamped_Twc.txt");
 		std::vector<TwcSample> base_samples = LoadTwcFile(base_twc);
 		std::vector<TwcSample> path_samples = BuildPathYaw(base_samples);
 		if (!SaveTwcFile(generated_twc, path_samples)) {
@@ -448,74 +579,217 @@ int main(int argc, char *argv[]){
 		input_trajectory_file = generated_twc;
 
 		output_trajectory_file = "";
-		output_trajectory_file_ue =
-			JoinPath(output_dir, "stamped_Twc_ue.txt");
-		output_trajectory_file_twc =
-			JoinPath(output_dir, "stamped_Twc.txt");
+		output_trajectory_file_ue = JoinPath(job.output_dir, "stamped_Twc_ue.txt");
+		output_trajectory_file_twc = JoinPath(job.output_dir, "stamped_Twc.txt");
 
-		output_initial_file = JoinPath(output_dir, "per_iteration_quivers.txt");
+		output_initial_file = JoinPath(job.output_dir, "per_iteration_quivers.txt");
 		output_initial_file_ue = "";
 		output_initial_file_twc = "";
 		output_visible_features_file =
-			JoinPath(output_dir, "visible_features_per_iteration.txt");
+		    JoinPath(job.output_dir, "visible_features_per_iteration.txt");
 	} else {
-		input_trajectory_file = JoinPath(input_dir, "stamped_Twc.txt");
+		input_trajectory_file = JoinPath(job.input_dir, "stamped_Twc.txt");
 
 		output_trajectory_file = "";
-		output_trajectory_file_ue = JoinPath(output_dir, "stamped_Twc_ue.txt");
-		output_trajectory_file_twc = JoinPath(output_dir, "stamped_Twc.txt");
+		output_trajectory_file_ue = JoinPath(job.output_dir, "stamped_Twc_ue.txt");
+		output_trajectory_file_twc = JoinPath(job.output_dir, "stamped_Twc.txt");
 
-		output_initial_file = JoinPath(output_dir, "per_iteration_quivers.txt");
+		output_initial_file = JoinPath(job.output_dir, "per_iteration_quivers.txt");
 		output_initial_file_ue = "";
 		output_initial_file_twc = "";
 		output_visible_features_file =
-			JoinPath(output_dir, "visible_features_per_iteration.txt");
+		    JoinPath(job.output_dir, "visible_features_per_iteration.txt");
 	}
 
-	std::string warm_start_flag = ReadEnvString("FOV_OPT_WARM_START");
-	if (!warm_start_flag.empty() && std::stoi(warm_start_flag) != 0) {
-		std::string warm_start_file = ReadEnvString("FOV_OPT_WARM_START_FILE");
-		std::string candidate = warm_start_file.empty() ? output_trajectory_file_twc : warm_start_file;
+	const bool use_warm_start =
+	    job.warm_start ||
+	    (!ReadEnvString("FOV_OPT_WARM_START").empty() &&
+	     std::stoi(ReadEnvString("FOV_OPT_WARM_START")) != 0);
+	if (use_warm_start) {
+		std::string warm_start_file = job.warm_start_file;
+		if (warm_start_file.empty()) {
+			warm_start_file = ReadEnvString("FOV_OPT_WARM_START_FILE");
+		}
+		std::string candidate =
+		    warm_start_file.empty() ? output_trajectory_file_twc : warm_start_file;
 		if (!candidate.empty() && FileExists(candidate)) {
 			input_trajectory_file = candidate;
 		} else {
-			std::cerr << "Warm start enabled but file not found: " << candidate << std::endl;
+			std::cerr << "Warm start enabled but file not found: " << candidate
+			          << std::endl;
 		}
 	}
-		
-		
+
 	std::string output_pointcloud_dir_file(" ");
 	std::string input_dir_file(" ");
 
-
-	bool use_direction=false;
-	bool use_uncertainty=false;
-	// TrajectoryOptimizerOnManifold traj_op(output_file,input_file,output_pointcloud_file,use_direction,use_uncertainty,input_dir_file,output_pointcloud_dir_file,input_trajectory_file,output_trajectory_file);
-	myTrajectoryOptimizerOnManifold traj_op(output_initial_file, output_initial_file_ue, output_initial_file_twc,
-		input_file,output_pointcloud_file,use_direction,use_uncertainty,input_dir_file,
-		output_pointcloud_dir_file,input_trajectory_file,output_trajectory_file, output_trajectory_file_ue, output_trajectory_file_twc);
+	bool use_direction = false;
+	bool use_uncertainty = false;
+	myTrajectoryOptimizerOnManifold traj_op(
+	    output_initial_file, output_initial_file_ue, output_initial_file_twc,
+	    input_file, output_pointcloud_file, use_direction, use_uncertainty,
+	    input_dir_file, output_pointcloud_dir_file, input_trajectory_file,
+	    output_trajectory_file, output_trajectory_file_ue, output_trajectory_file_twc);
 	ApplyEnvOverrides(traj_op);
 	ApplyVisibleFeatureDumpOverride(traj_op, output_visible_features_file);
+	ApplyOcclusionBackendEnvOverrides(traj_op);
+
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+	if (shared_resources.depth_map_visibility_checker) {
+		std::cout << "=== Prebuilt Visibility Map Integration (shared) ==="
+		          << std::endl;
+		traj_op.setSharedVisibilityDepthMapChecker(
+		    shared_resources.depth_map_visibility_checker,
+		    shared_resources.depth_map_path);
+	}
+#endif
+
+	double occlusion_prefilter_ms = 0.0;
+	double esdf_prefilter_ms = 0.0;
+	double depthmap_prefilter_ms = 0.0;
+	std::string prefilter_backend = "none";
+	std::string depth_map_path = ReadEnvString("FOV_OPT_VISIBILITY_DEPTHMAP_PATH");
+	if (depth_map_path.empty()) {
+		depth_map_path = ReadEnvString("FOV_OPT_DEPTHMAP_PATH");
+	}
+#ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
+	if (!shared_resources.depth_map_visibility_checker && !depth_map_path.empty()) {
+#else
+	if (!depth_map_path.empty()) {
+#endif
+		std::cout << "=== Prebuilt Visibility Map Integration ===" << std::endl;
+		if (!traj_op.loadVisibilityDepthMap(depth_map_path)) {
+			std::cerr << "Warning: Failed to load visibility depth map from "
+			          << depth_map_path << std::endl;
+		}
+	}
 
 	std::string esdf_map_path = ReadEnvString("FOV_OPT_ESDF_PATH");
 	if (!esdf_map_path.empty()) {
 		std::cout << "=== ESDF Integration ===" << std::endl;
 		if (traj_op.loadEsdfMap(esdf_map_path)) {
 			ApplyEsdfEnvOverrides(traj_op);
-			size_t visible_count = traj_op.prefilterVisiblePoints();
-			std::cout << "Pre-filtering complete. Unique visible landmarks="
-			          << visible_count << std::endl;
 		} else {
-			std::cerr << "Warning: Failed to load ESDF from " << esdf_map_path << std::endl;
-			std::cerr << "Continuing optimization without occlusion filtering." << std::endl;
+			std::cerr << "Warning: Failed to load ESDF from " << esdf_map_path
+			          << std::endl;
+			std::cerr << "Continuing optimization without occlusion filtering."
+			          << std::endl;
 		}
 	}
 
-	traj_op.optimize(true);
+	if (traj_op.isOcclusionPrefilterEnabled()) {
+		const auto prefilter_start = std::chrono::steady_clock::now();
+		const size_t visible_count = traj_op.prefilterVisiblePoints();
+		const auto prefilter_end = std::chrono::steady_clock::now();
+		occlusion_prefilter_ms = std::chrono::duration<double, std::milli>(
+		    prefilter_end - prefilter_start).count();
+		prefilter_backend = traj_op.getEffectiveOcclusionBackendName();
+		if (prefilter_backend == "esdf") {
+			esdf_prefilter_ms = occlusion_prefilter_ms;
+		} else if (prefilter_backend == "depthmap") {
+			depthmap_prefilter_ms = occlusion_prefilter_ms;
+		}
+		std::cout << "Pre-filtering complete. backend=" << prefilter_backend
+		          << ", unique visible landmarks=" << visible_count
+		          << ", time_ms=" << occlusion_prefilter_ms << std::endl;
+	}
+
+	traj_op.exportInitialTrajectoryReference();
+	const auto optimize_start = std::chrono::steady_clock::now();
+	traj_op.optimize(false);
+	const auto optimize_end = std::chrono::steady_clock::now();
+	const double optimization_core_ms = std::chrono::duration<double, std::milli>(
+	    optimize_end - optimize_start).count();
+	const double total_measured_ms = occlusion_prefilter_ms + optimization_core_ms;
+	traj_op.exportOptimizedTrajectoryOutputs();
+
+	std::cout << "Optimization timing: core_ms=" << optimization_core_ms
+	          << ", esdf_prefilter_ms=" << esdf_prefilter_ms
+	          << ", depthmap_prefilter_ms=" << depthmap_prefilter_ms
+	          << ", occlusion_prefilter_ms=" << occlusion_prefilter_ms
+	          << ", prefilter_backend=" << prefilter_backend
+	          << ", total_ms=" << total_measured_ms << std::endl;
+
+	const std::string timing_path = JoinPath(job.output_dir, "optimization_timing.csv");
+	std::ofstream timing_file(timing_path);
+	if (timing_file.is_open()) {
+		timing_file << "optimization_core_ms,esdf_prefilter_ms,total_measured_ms,"
+		               "depthmap_prefilter_ms,occlusion_prefilter_ms,prefilter_backend\n";
+		timing_file << std::fixed << std::setprecision(6)
+		            << optimization_core_ms << ","
+		            << esdf_prefilter_ms << ","
+		            << total_measured_ms << ","
+		            << depthmap_prefilter_ms << ","
+		            << occlusion_prefilter_ms << ","
+		            << prefilter_backend << "\n";
+	}
+
 	if (!generated_input_trajectory_file.empty() &&
 	    generated_input_trajectory_file != output_trajectory_file_twc) {
 		std::remove(generated_input_trajectory_file.c_str());
 	}
-		
 
+	if (timing_summary) {
+		timing_summary->optimization_core_ms = optimization_core_ms;
+		timing_summary->occlusion_prefilter_ms = occlusion_prefilter_ms;
+		timing_summary->esdf_prefilter_ms = esdf_prefilter_ms;
+		timing_summary->depthmap_prefilter_ms = depthmap_prefilter_ms;
+		timing_summary->total_measured_ms = total_measured_ms;
+		timing_summary->prefilter_backend = prefilter_backend;
+	}
+	return 0;
+}
+
+int RunServerMode() {
+	std::ostream protocol(std::cout.rdbuf());
+	std::cout.rdbuf(std::cerr.rdbuf());
+
+	SharedResources shared_resources;
+	if (!InitializeSharedResources(&shared_resources)) {
+		protocol << "INIT_FAILED" << std::endl;
+		return 1;
+	}
+
+	protocol << "READY" << std::endl;
+
+	std::string line;
+	while (std::getline(std::cin, line)) {
+		if (line == "EXIT") {
+			protocol << "BYE" << std::endl;
+			return 0;
+		}
+
+		JobRequest job;
+		if (!ParseServerJobRequest(line, &job)) {
+			protocol << "RESULT\t1\tparse_error" << std::endl;
+			continue;
+		}
+
+		JobTimingSummary timing_summary;
+		const int result =
+		    RunOptimizationJob(job, shared_resources, &timing_summary);
+		protocol << "RESULT\t" << result << "\t"
+		         << timing_summary.total_measured_ms << std::endl;
+	}
+
+	return 0;
+}
+}  // namespace
+
+int main(int argc, char *argv[]){
+	if (argc == 2 && std::string(argv[1]) == "--server") {
+		return RunServerMode();
+	}
+
+	if (argc < 3 || argc > 5) {
+		return 0;
+	}
+	SharedResources shared_resources;
+	const JobRequest job = {
+	    std::string(argv[1]),
+	    std::string(argv[2]),
+	    (argc >= 4) ? (std::stoi(argv[3]) != 0) : false,
+	    ResolvePointCloudPath(std::string(argv[1]), argc, argv),
+	};
+	return RunOptimizationJob(job, shared_resources, nullptr);
 }

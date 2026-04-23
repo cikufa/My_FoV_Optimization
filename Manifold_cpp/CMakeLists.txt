@@ -34,6 +34,24 @@ if(EXISTS "/home/shekoufeh/fov/FIF_ws/src/voxblox/voxblox/include/voxblox/core/e
   set(VOXBLOX_LOCAL_AVAILABLE TRUE)
 endif()
 
+set(ACT_MAP_LOCAL_INCLUDE_DIRS
+  /home/shekoufeh/fov/FIF_ws/src/rpg_information_field/act_map/include
+  /home/shekoufeh/fov/FIF_ws/src/rpg_information_field/third_party/rpg_common/include
+  /home/shekoufeh/fov/FIF_ws/src/rpg_information_field/third_party/rpg_vi_utils/include
+  /home/shekoufeh/fov/FIF_ws/devel/include
+  /home/shekoufeh/fov/FIF_ws/build/act_map
+  /usr/include/opencv
+)
+set(ACT_MAP_LOCAL_LIBS
+  /home/shekoufeh/fov/FIF_ws/devel/lib/libact_map.so
+  /home/shekoufeh/fov/FIF_ws/devel/lib/libact_map_proto.so
+)
+set(ACT_MAP_LOCAL_AVAILABLE FALSE)
+if(EXISTS "/home/shekoufeh/fov/FIF_ws/src/rpg_information_field/act_map/include/act_map/visibility_checker.h"
+   AND EXISTS "/home/shekoufeh/fov/FIF_ws/devel/lib/libact_map.so")
+  set(ACT_MAP_LOCAL_AVAILABLE TRUE)
+endif()
+
 
 
 #add manifold executable
@@ -77,4 +95,13 @@ elseif(VOXBLOX_LOCAL_AVAILABLE)
   message(STATUS "Using local FIF_ws Voxblox fallback - ESDF occlusion filtering enabled")
 else()
   message(STATUS "Voxblox not found - ESDF occlusion filtering will be disabled")
+endif()
+
+if(ACT_MAP_LOCAL_AVAILABLE)
+  target_include_directories(${PROJECT_NAME}_trajectory PRIVATE ${ACT_MAP_LOCAL_INCLUDE_DIRS})
+  target_compile_definitions(${PROJECT_NAME}_trajectory PRIVATE FOV_HAVE_ACT_MAP_DEPTHMAP=1)
+  target_link_libraries(${PROJECT_NAME}_trajectory ${ACT_MAP_LOCAL_LIBS})
+  message(STATUS "Using local FIF_ws act_map fallback - prebuilt visibility depth-map filtering enabled")
+else()
+  message(STATUS "act_map not found - prebuilt visibility depth-map filtering will be disabled")
 endif()

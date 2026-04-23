@@ -307,6 +307,132 @@ BF cache columns:
 - `bf_time_feat_us`
 - `bf_time_vis_us`
 
+### Trajectory Optimizer Debug And Timing
+
+For the trajectory optimizer in `My_FoV_Optimization/Manifold_cpp/trajectory_test.cpp`,
+the core optimization loop now excludes analysis-only visibility calculations unless you
+explicitly re-enable them.
+
+To re-enable the scheduled / post-update / fixed-angle visibility metrics and write them
+to a CSV debug log:
+
+```bash
+export FOV_OPT_DEBUG_LOG_ENABLED=1
+export FOV_OPT_DEBUG_LOG_PATH=/absolute/path/to/optimization_debug.csv
+```
+
+You can also use:
+
+```bash
+export FOV_OPT_DEBUG_LOG=1
+```
+
+If `FOV_OPT_DEBUG_LOG_PATH` is not set, the optimizer writes `optimization_debug.csv`
+next to the trajectory outputs.
+
+This debug log includes per-pose, per-iteration analysis values such as:
+- scheduled visibility count / score
+- post-update visibility count / score
+- fixed-angle visibility count / score
+- Jacobian components and step statistics
+
+These values are for analysis and debugging. They are not required for the optimizer update
+itself, and keeping them disabled gives a cleaner measure of optimization runtime.
+
+The trajectory runner also writes split timing information to:
+
+`<output_dir>/optimization_timing.csv`
+
+with the columns:
+- `optimization_core_ms`: pure optimization time after prefiltering, measured with `traj_op.optimize(false)` so debug/eval exports are excluded
+- `esdf_prefilter_ms`: time spent in `prefilterVisiblePoints()` when the ESDF backend is used
+- `total_measured_ms`: `optimization_core_ms + occlusion_prefilter_ms`
+- `depthmap_prefilter_ms`: time spent in `prefilterVisiblePoints()` when the prebuilt visibility depth-map backend is used
+- `occlusion_prefilter_ms`: generic prefilter time for whichever occlusion backend actually ran
+- `prefilter_backend`: `none`, `esdf`, or `depthmap`
+
+This lets you report optimization time separately from the occlusion prefilter step while
+keeping backward-compatible ESDF timing columns. Final trajectory files are still written
+after the timer stops.
+
+You can choose the occlusion backend with:
+
+```bash
+export FOV_OPT_OCCLUSION_BACKEND=auto
+```
+
+Supported values are:
+- `auto`: prefer ESDF if loaded, otherwise use the prebuilt visibility depth map if loaded
+- `esdf`: force the online ESDF raycast prefilter
+- `depthmap`: force the prebuilt visibility depth-map query backend
+- `none`: disable occlusion prefiltering
+
+To use the prebuilt visibility depth-map backend, set:
+
+```bash
+export FOV_OPT_OCCLUSION_BACKEND=depthmap
+export FOV_OPT_VISIBILITY_DEPTHMAP_PATH=/absolute/path/to/depthmap.proto
+```
+
+Optional depth-range limits for the depth-map backend:
+
+```bash
+export FOV_OPT_VISMAP_MIN_DIST=0.0
+export FOV_OPT_VISMAP_MAX_DIST=20.0
+```
+
+Aliases `FOV_OPT_DEPTHMAP_PATH`, `FOV_OPT_DEPTHMAP_MIN_DIST`, and
+`FOV_OPT_DEPTHMAP_MAX_DIST` are also supported.
+
+When the depth-map backend is used through the batch runner scripts
+(`optimize_trajopt.sh` / `run_fov_opt_rrt_none.sh`), the runner now keeps a
+single long-lived `manifold_test_trajectory --server` worker alive and loads
+`depthmap.proto` once for the whole batch. Each trajectory is then optimized by
+sending a request to that worker, which matches the FIF-style "maps already
+loaded, planning queried repeatedly" setup more closely.
+
+As a result, per-trajectory `optimization_time_sec.txt` for the depth-map
+backend excludes the one-time worker startup and depth-map load, and measures
+the per-request runtime instead.
+
+Example runs for each backend:
+
+```bash
+# no occlusion prefilter
+FOV_OPT_OCCLUSION_BACKEND=none \
+/home/shekoufeh/fov/My_FoV_Optimization/Manifold_cpp/build/manifold_test_trajectory \
+<input_dir> <output_dir> 1
+
+# online ESDF occlusion prefilter
+FOV_OPT_OCCLUSION_BACKEND=esdf \
+FOV_OPT_ESDF_PATH=/absolute/path/to/esdf_map.proto \
+/home/shekoufeh/fov/My_FoV_Optimization/Manifold_cpp/build/manifold_test_trajectory \
+<input_dir> <output_dir> 1
+
+# prebuilt visibility depth-map backend
+FOV_OPT_OCCLUSION_BACKEND=depthmap \
+FOV_OPT_VISIBILITY_DEPTHMAP_PATH=/absolute/path/to/depthmap.proto \
+/home/shekoufeh/fov/My_FoV_Optimization/Manifold_cpp/build/manifold_test_trajectory \
+<input_dir> <output_dir> 1
+
+# auto backend selection
+# current behavior: if both ESDF and depth-map are loaded, auto picks ESDF first
+FOV_OPT_OCCLUSION_BACKEND=auto \
+FOV_OPT_ESDF_PATH=/absolute/path/to/esdf_map.proto \
+FOV_OPT_VISIBILITY_DEPTHMAP_PATH=/absolute/path/to/depthmap.proto \
+/home/shekoufeh/fov/My_FoV_Optimization/Manifold_cpp/build/manifold_test_trajectory \
+<input_dir> <output_dir> 1
+```
+
+For the warehouse FIF depth map already in this workspace, you can use:
+
+```bash
+FOV_OPT_OCCLUSION_BACKEND=depthmap \
+FOV_OPT_VISIBILITY_DEPTHMAP_PATH=/home/shekoufeh/fov/FIF_ws/src/rpg_information_field/act_map_exp/exp_data/warehouse_depth_and_landmarks/depthmap.proto \
+/home/shekoufeh/fov/My_FoV_Optimization/Manifold_cpp/build/manifold_test_trajectory \
+<input_dir> <output_dir> 1
+```
+
 
 ### Mapping  (step1)
 During the Mapping stage, we first capture a rosbag with posed images (How to is in the 'Runs' section below), the trajectory should be for  "mapping" purpose. By running both lidar localizaiton, and D455 cameras mounted on top of robot.
