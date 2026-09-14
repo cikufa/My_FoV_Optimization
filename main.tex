@@ -1,0 +1,857 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}  % Comment this line out if you need a4paper
+
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}      % Use this line for a4 paper
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{subcaption}
+% \usepackage{hyperref}
+\usepackage{mathtools}
+\IEEEoverridecommandlockouts                              % This command is only needed if
+                                                          % you want to use the \thanks commandggg
+
+\overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+%In case you encounter the following error:
+%Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+%Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+%This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with acrobat reader
+%Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+%\pdfobjcompresslevel=0
+%\pdfminorversion=4
+
+% See the \addtolength command later in the file to balance the column lengths
+% on the last page of the document
+
+% The following packages can be found on http:\\www.ctan.org
+%\usepackage{graphics} % for pdf, bitmapped graphics files
+%\usepackage{epsfig} % for postscript graphics files
+%\usepackage{mathptmx} % assumes new font selection scheme installed
+%\usepackage{times} % assumes new font selection scheme installed
+%\usepackage{amsmath} % assumes amsmath package installed
+%\usepackage{amssymb}  % assumes amsmath package installed
+
+\makeatletter
+\let\NAT@parse\undefined
+\makeatother
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{verbatim}
+
+%\title{Maximize Fisher Information in Realtime, Gimbal-mounted, Limited FOV Sensors - Camera View Angle and Visibility Optimization On Manifold}
+
+
+\title{\LARGE \bf Maximizing Feature Visibility by Online On-Manifold Optimization For Motion-Decoupled Cameras}
+
+
+
+\author{Yuyang Chen$^{*}$, Shekoufeh Sadeghi$^{*}$, Charuvahan Adhivarahan$^{1}$, Elton Lemos$^{1}$, Chen Wang$^{1}$, Sanjeev J.  Koppal$^{2}$, Karthik Dantu$^{1}$% <-this % stops a space
+\thanks{*Equal contribution}%
+\thanks{$^{1}$Yuyang Chen, Shekoufeh Sadeghi, Charuvahan Adhivarahan, Elton Lemos, Chen Wang and Karthik Dantu are with the department of Computer Science and Engineering,
+        University at Buffalo - State University of New York, 338 Davis Hall, Buffalo, NY 14260-2500.
+        {\tt\small \{yuyangch,charuvah,eltonroq, cwx, kdantu\}@buffalo.edu}}%
+\thanks{$^{2}$Sanjeev Koppal is with the Department of Electrical and Computer Engineering, University of Florida, Gainesville, FL 32603, USA
+{\tt\small  sjkoppal@ece.ufl.edu}}
+}
+
+
+
+\begin{document}
+
+\maketitle
+
+
+
+\begin{abstract}
+A fundamental assumption in robotic perception algorithms is that the sensor's field-of-view (FoV) is fixed w.r.t the robot. This has led to research in areas such as active vision where robot planning is adapted to improve perception. More recently, there is an emerging class of sensors that can dynamically adjust their FoV during runtime, including PTZ cameras, sensors mounted on gimbals, RF radar systems, and others. This class of sensors decouple their orientation from that of the robot allowing for greater flexibility in algorithm design as well as separation of perception and planning algorithms. Such sensors require novel algorithms to calculate the sensor FoV for best perception. In this paper, we propose an online sensor view generation method over $SO(3)$ that optimizes sensor's rotation by maximizing feature visibitlity in the sensor's limited FoV. Since the amount of features can vary widely, our sensor view planning framework can be naturally extended to various perception applications such as localization, mapping, tracking and others.
+
+%in various domains such as Points-of-Interest tracking, cinematography capture planning and critical safety threat detection. Concurrently, advances in Active Vision has shown great benefits of taking various perception metric into consideration at planning time. Nevertheless, A large body of work in this field are built with the implicit assumptions that the sensor frame and the vehicle's body frame are rigidly coupled together, therefore deferentially flat assumptions are made to limit the motion planning into lower dimension, such as the 4-DOF space for quadrotors.  We propose an online sensor trajectory generation method over $SO(3)$. In this paper, we seek to maximize the visual localization perception metric, at planning time. Specifically, according to the previously proposed Fisher Information metric, we seek to maximize the amount of visual features in the sensor's limited FOV. Since The amount of features can vary from one to any mount, the sensor trajectory planning framework can be naturally extended to various aforementioned sensor applications with various amount of POI. Decoupled from the motion of the vehicle body, This method optimize sensor's FOV rotation only.
+\end{abstract}
+\section{Introduction}
+%add problem formulation
+\begin{figure}[h!]
+\centering
+% \vspace{-20pt}
+\begin{subfigure}[b]{0.45\textwidth}
+    \includegraphics[width=1.0\textwidth,trim={40pt 40 40 40},clip]{mean_center_of_all_points_dot_product.pdf}
+    \caption{~Without FOV limit. Optimizing with $J$ only, it converges to the mean center of all feature points. The mean center of all feature points are labeled in red.}
+    \label{fig:mean}
+    \vspace{+10pt}
+\end{subfigure}
+
+
+
+
+\begin{subfigure}[b]{0.45\textwidth}
+    \includegraphics[trim={40pt 40 40 20},width=1.0\textwidth]{FOV_30degree.pdf}
+    \caption{~After imposing 45 degree FOV limit by optimizing with $J_{visibility}$, the result converges to one of the clusters of features}
+    \label{fig:FOV}
+\end{subfigure}
+\caption{}
+\vspace{-10pt}
+\end{figure}
+
+
+
+% ------------------ intro ------------------
+Establishing task-oriented robotic autonomy hinges on the robot's ability to observe and identify task-specific features in its surroundings. With many sensors constrained by a limited FoV, it is critical to strategically control the sensing configuration to effectively capture these features. Addressing this challenge, \emph{active perception}~\cite{bajcsy1988active} incorporates task-relevant perception objectives into planning. Notable applications include robot exploration~\cite{indelman2015planning}, visual localization~\cite{zhang2020fisher, costante2016perception, alzugaray2017short}, and reconstruction~\cite{isler2016information}.
+
+Within these domains, planning sensor viewpoints efficiently remains a central challenge, particularly in environments with a large number of perceptual features.
+
+Active perception tasks can broadly be categorized based on the number of perceptual targets involved. The first category involves a small number of targets (1--10), such as reconstruction tasks~\cite{isler2016information}, or cinematography applications~\cite{nageli2017real}, where a few targets are actively tracked within the camera's FOV. The second category involves a large number of targets (10+), as in visual localization tasks, where performance depends on maximizing perceptual metrics such as Fisher Information (FI)~\cite{zhang2020fisher, zhang2018perception, alzugaray2017short}. In such scenarios, the number of features can range from thousands to tens of thousands, making efficient viewpoint selection critical.
+
+Across both categories, maximizing the number of observable features within a limited FOV is essential. In this work, we focus on maximizing feature visibility as the primary objective. For visual localization, this objective can be extended to maximizing FI, which can be interpreted as a weighted variant of feature visibility. \textcolor{red}{double check fisher version}
+
+Recent advances in hardware further motivate this problem. Steerable narrow-FOV sensors mounted on actuated platforms, such as gimbal-stabilized cameras, are increasingly prevalent in both research~\cite{liu2020real, jakobsen2005control, zou2006pan} and industry.\footnote{\url{https://www.dji.com/zenmuse-x7}} Beyond cameras, emerging technologies such as micro-electromechanical systems (MEMS)-based LiDARs~\cite{wang2017ultra,wang2019large,wang2020low} also enable dynamic control of sensing direction~\cite{https://doi.org/10.48550/arxiv.2302.14334}. We refer to such systems as \emph{motion decoupled sensors}, where the sensing direction can be controlled independently of robot motion.
+
+This decoupling introduces new opportunities for perception-aware planning, but also necessitates efficient methods for real-time viewpoint optimization. \textcolor{red}{add more motivation?}
+
+
+% ------------------ PROBLEM STATEMENT ------------------
+
+\textcolor{red}{Added problem statement} In this work, we consider a robot equipped with a motion decoupled sensor operating along a pre-planned translation trajectory. The environment contains a set of known perceptual features relevant to a downstream task. We actively control the sensor orientation at each point along the trajectory, independent of the robot motion. The goal is to compute a sequence of sensor orientations that maximizes the number of observed features, or a task-relevant perceptual metric such as FI, under FOV constraints.
+
+This problem becomes particularly challenging in large-scale environments, where the number of features is high and exhaustive evaluation over candidate viewing directions is computationally prohibitive for real-time applications.
+
+
+% ------------------ PRIOR WORK LIMITATION ------------------
+Existing approaches for viewpoint optimization, particularly in visual localization, often rely on FI-based methods to determine informative viewpoints~\cite{zhang2019beyond, zhang2020fisher}. However, these approaches typically require either exhaustive evaluation over candidate viewing directions or the construction of global information representations, limiting their applicability in real-time settings.
+
+
+% ------------------ OUR APPROACH -+ why rotation only -----------------
+
+To address these challenges, we propose an online, iterative optimization method on the Special Orthogonal Group $SO(3)$ for determining optimal sensor orientations in real time. Unlike prior approaches that jointly optimize robot motion and sensing configuration, we exploit the capabilities of motion decoupled sensors to separate translation and orientation planning. This allows us to assume a pre-planned trajectory and formulate viewpoint selection purely as a rotation optimization problem.
+
+By restricting optimization to $SO(3)$, we significantly reduce the complexity of the problem while retaining the ability to actively control perception. We leverage the intrinsic manifold structure of rotations to perform efficient gradient-based updates, avoiding discretization of the viewing space and eliminating the need for exhaustive search. This formulation enables scalable optimization with respect to the number of features, making it suitable for real-time deployment in large-scale environments.
+
+Building on prior work on motion decoupled sensing systems~\cite{https://doi.org/10.48550/arxiv.2302.14334}, we demonstrate through simulation and real-world experiments that the proposed method achieves performance comparable to brute-force approaches at significantly reduced computational cost. \textcolor{red}{trying to justify rotation-only optimization and that on so(3)}
+
+% ------------------ CONTRIBUTION SUMMARY ------------------
+
+In summary, we propose a novel online optimization method on $SO(3)$ for motion decoupled, limited FoV sensors. The method supports both direct maximization of visible features and optimization of perceptual metrics such as FI, enabling efficient and scalable active perception in real-time robotic applications.
+
+\color{black}
+
+\section{Related Work}
+%\color{blue}Needs more descriptions of previous work, one by one \color{black}
+To the best of our knowledge, existing active perception work that plans in $SO(3)$ cannot handle 1000-15000 visual targets in a real-time fashion. There are notable works that plan in the differentially flattened space, where only the yaw orientation of the robot is planned. However, they generally do not satisfy the requirements of timeliness, capacities for a large amount of visual targets, and the planning needs for $SO(3)$.
+
+A few notable works ~\cite{zhang2020fisher, nageli2017real, watterson2018trajectory} investigate planning in $SO(3)$. The computation time in~\cite{watterson2018trajectory} is around 30 seconds, making it unsuitable for real-time application. The Fisher Information Field(FIF) building time in~\cite{zhang2020fisher} is in the order of 5 to 40 seconds, making it also unsuitable for real-time exploration scenarios.  Although after the FIF is built, the query time is in the order of microseconds. In this paper, we propose methods that do not require a pre-built map. This allows further extension to dynamic point of interest in the environment since the pre-built map is fixed. It also allows further extension into exploration in unknown environments, since in that type of scenario, map features are frequently updated and pre-built map has to be updated in time.  Further, we will show that planning with our method requires about the same total time as planning with FIF, at the same level of features.
+
+In the previous work, the barrier to real-time application \cite{zhang2020fisher,zhang2019beyond} is the map building cost, with 3000 samples, the map building costs were reported at 5 to 40s of seconds. This is bottleneck by exhaustive search for optimal FOV orientations at sampled poses. After map building, the trajectory planning costs were reported at around 130-390 ms with quadratic and GP trace, with from 1.5 to 3.4k features.
+
+Our proposed method operates on point-cloud, and does not require expensive map pre-building, we will show through experiments that our planning time also stays around the same area, at around 460 ms, and we handle around 15k features.
+We mainly investigate active perception in \emph{visual localization} scenarios, using metrics presented in~\cite{zhang2020fisher}. This scenario is different than what~\cite{nageli2017real} investigates. Namely, visual features are present in the order of thousands or tens of thousands. In~\cite{nageli2017real}, cinematography targets are in the number of 1 to 3. We also need to consider FOV limits of our sensors. We will later compare our method's time costs with~\cite{nageli2017real}.
+
+\section{Problem Formulation}
+\label{sec:problem}
+
+We consider a robot equipped with a motion-decoupled visual sensor (e.g., a pan--tilt or gimbal-mounted camera), whose orientation can be controlled independently of the robot's body motion. This enables the robot to follow a pre-planned translation trajectory while actively optimizing sensor orientation.
+
+\subsection{Problem Setup}
+
+Let the robot translation trajectory be:
+\begin{equation}
+T = \{t_0, t_1, \dots, t_N\}, \quad t_i \in \mathbb{R}^3
+\end{equation}
+We assume a set of observable visual features:
+\begin{equation}
+\mathcal{P} = \{p_1, p_2, \dots, p_M\}, \quad p_j \in \mathbb{R}^3
+\end{equation}
+The sensor orientation at time $i$ is:
+\begin{equation}
+R_i \in SO(3)
+\end{equation}
+The camera has a limited FoV defined by a half-angle $\alpha$.
+
+\subsection{Objective}
+Given $T$, we seek:
+\begin{equation}
+\mathcal{R} = \{R_0, R_1, \dots, R_N\}
+\end{equation}
+that maximizes feature visibility while maintaining smooth motion:
+\begin{equation}
+\max_{\{R_i\}} \sum_{i=0}^{N} \sum_{j=1}^{M} v(R_i, t_i, p_j)
+\end{equation}
+
+\subsection{Orientation Continuity}
+To ensure smooth actuation:
+\begin{equation}
+\Delta R_i = R_{i+1} R_i^T
+\end{equation}
+
+\subsection{Optimization Problem}
+\begin{equation}
+\max_{\{R_i\}}
+\sum_{i=0}^{N} \sum_{j=1}^{M} v(R_i, t_i, p_j)
+-
+\lambda \sum_{i=0}^{N-1} d(R_{i+1}, R_i)
+\end{equation}
+where $d(\cdot)$ is a distance metric on $SO(3)$.
+
+\section{Approach}
+
+We solve the viewpoint optimization problem defined in Section~\ref{sec:problem} using an online optimization scheme on the $SO(3)$ manifold. By leveraging the motion-decoupled nature of the sensor, we restrict the problem to rotation-only optimization along a fixed translation trajectory. This significantly reduces computational complexity and enables real-time operation, at the cost of not jointly optimizing translation and orientation.
+
+\subsection{Visibility Modeling}
+
+Following prior work~\cite{zhang2019beyond, zhang2020fisher}, feature visibility is modeled using a smooth approximation of the FOV constraint. A feature is considered visible if the angle between its bearing direction and the camera optical axis is within a threshold $\alpha$.
+
+\begin{equation}
+v(\theta)=\frac{1}{1+e^{-k_s(\cos\theta-\cos\alpha)}}
+\label{eqn:sigmoid}
+\end{equation}
+
+
+\begin{figure}[h!]
+\centering
+\begin{subfigure}{.46\linewidth}
+  \centering
+  \includegraphics[trim=0.0cm 0.0cm 0.0cm 0cm, clip,width=\linewidth]{FOV_f_drawing.pdf}
+    \caption{Visibility as a function of $\theta$. $\alpha$ is the FOV's limit, $\boldsymbol{f}$ is the visual feature. $C$ is the projection center. $\boldsymbol{e}^3$ is the optical axis.}
+    \label{fig:FOV_f_drawing}
+\end{subfigure}%
+\hspace{0.2cm}
+\begin{subfigure}{.46\linewidth}
+  \centering
+  \includegraphics[trim=0.0cm 0.0cm 0.0cm 0cm, clip,width=\linewidth]{binary_sigmoid.pdf}
+    \caption{The binary FOV visibility function with $\alpha = 45 deg$. It is  approximated by Sigmoid functions with different $k_s$.}
+    \label{fig:binary_sigmoid}
+\end{subfigure}
+    \caption{Graphs repeated from \cite{zhang2020fisher}} for clarity. Refer to the paper for more details.
+\label{fig:visibility}
+\end{figure}
+where ($\theta$,$\alpha$) are as shown in Figure ~\ref{fig:FOV_f_drawing}. $\theta$ is the bearing angle to a feature $\boldsymbol{f}$, and $\alpha$ is the  FOV limit. $k_s$ controls the sharpness of the transition near the FOV boundary. The effect of varying $k_s$ is shown in Figure ~\ref{fig:binary_sigmoid}.
+
+Finally,
+\begin{equation}
+\cos(\theta) = (\boldsymbol{p}_i^c)^T \boldsymbol{e^3}
+\label{eqn:cos}
+\end{equation}
+where $\boldsymbol{p}_i^c$ is the normalized feature coordinate in the camera frame and $\boldsymbol{e^3} = [0,0,1]^T$ is the optical axis.
+
+This smooth approximation enables gradient-based optimization over sensor orientation.
+
+\subsection{On-Manifold Optimization}
+
+We derive a steepest descent optimization scheme on $SO(3)$ to maximize feature visibility.
+First, we change the equation~\ref{eqn:cos} slightly to express the camera's rotation and translation in the world frame:
+% \begin{equation*}\label{eqn:cos_mod}
+% % \begin{align*}
+% \begin{multlined}
+% cos(\theta) =[(\boldsymbol{R}^{w})^T(\boldsymbol{p}_i^w-\boldsymbol{t}^w/||\boldsymbol{p}_i^w-\boldsymbol{t}^w||)]^T\boldsymbol{e^3}\\=(\boldsymbol{p}_i^w-\boldsymbol{t}^w/||\boldsymbol{p}_i^w-\boldsymbol{t}^w||)^T\boldsymbol{R}^{w}\boldsymbol{e^3}
+% % \end{align*}
+% \end{multlined}
+% \end{equation*}
+
+\begin{equation}\label{eqn:cos_mod}
+% \begin{align*}
+cos(\theta) =(\frac{\boldsymbol{p}_i^w - \boldsymbol{t}^w}{\|\boldsymbol{p}_i^w - \boldsymbol{t}^w\|})^T\boldsymbol{R}^{w}\boldsymbol{e^3}
+% \end{align*}
+\end{equation}
+
+where $\boldsymbol{R}^{w}$ is the camera's world frame rotation, $\boldsymbol{t}_w$ its translation, and $\boldsymbol{p}_i^w$ is feature $i$'s world frame position.
+
+Now we find the Jacobian of this function over $\boldsymbol{R}_{w}$. We will use the lift-solve-retract Manifold optimization scheme introduced previously~\cite{forster2015imu}. First rewrite the equation with Lie-algebra where $\boldsymbol{R}^{w}=\boldsymbol{exp}(\boldsymbol{w})\boldsymbol{R}_0, \boldsymbol{w} \in \boldsymbol{so}(3)$, $\boldsymbol{w}$ is the lie-algebra in the tangent space $\boldsymbol{so}(3)$, and $\boldsymbol{exp}(.)$ is the exponential map using Rodriguez's equation:
+\begin{equation}
+cos(\theta)=(\frac{\boldsymbol{p}_i^w - \boldsymbol{t}^w}{\|\boldsymbol{p}_i^w - \boldsymbol{t}^w\|})^T\boldsymbol{exp}(\boldsymbol{w})\boldsymbol{R}_0\boldsymbol{e^3}
+\label{eqn:cos_mod_lie}
+\end{equation}
+where $\boldsymbol{R}_0$ is the starting rotation in optimization.
+
+
+Let $\boldsymbol{k}^T=(\frac{\boldsymbol{p}_i^w - \boldsymbol{t}^w}{\|\boldsymbol{p}_i^w - \boldsymbol{t}^w\|})^T$ and $\boldsymbol{c}=\boldsymbol{R}_0\boldsymbol{e}^3$, the Jacobian of $cos(\theta)$ is
+\begin{equation}
+\boldsymbol{J}=[c_2k_3-c_3k_2 , c_3k_1-c_1k_3 , c_1k_2-c_2k_1]
+\label{eqn:jacobian}
+\end{equation}
+The derivation is outlined here. Starting from equation \ref{eqn:cos_mod_lie}, re-write the exponential map with its first order Taylor Series approximation $I+\boldsymbol{w}_{\wedge}$~\cite{forster2015imu}, Where $I$ is the 3x3 identity matrix and $\boldsymbol{w}_{\wedge}$ is the skew-symmetric matrix of $\boldsymbol{w}$:
+
+\begin{equation}
+cos(\theta)=\boldsymbol{k}^T[I+\boldsymbol{w}_{\wedge}]\boldsymbol{c}
+\label{eqn:cos_mod_lie_taylor_symplified}
+\end{equation}
+$\boldsymbol{k}$ is 3x1, $\boldsymbol{c}$ is 3x1.
+
+Now take the derivative of equation~\ref{eqn:cos_mod_lie_taylor_symplified}, with respect to $\boldsymbol{w}$:
+\begin{equation}
+\frac{\partial cos(\theta)}{\partial\boldsymbol{w}}=
+\frac{\partial \begin{bmatrix}
+k_1&k_2&k_3
+\end{bmatrix}
+\begin{bmatrix}
+1 & -w_3 & w_2\\
+w_3 & 1 & -w_1\\
+-w_2 & w_1 & 1\\
+\end{bmatrix}
+\begin{bmatrix}
+c_1\\c_2\\c_3
+\end{bmatrix}}
+{\partial \boldsymbol{w}}
+\label{eqn:derivative_expanded}
+\end{equation}
+
+and  the result is :
+\begin{equation}
+\frac{\partial cos(\theta)}{\partial\boldsymbol{w}}=
+\begin{bmatrix}
+ \frac{\partial cos(\theta)}{\partial w_{1}}\\
+  \frac{\partial cos(\theta)}{\partial w_{2}}\\
+   \frac{\partial cos(\theta)}{\partial w_{3}}
+\end{bmatrix}
+=
+\begin{bmatrix}
+    c_2k_3-c_3k_2\\
+    c_3k_1-c_1k_3\\
+    c_1k_2-c_2k_1
+\end{bmatrix}
+\label{eqn:result}
+\end{equation}
+
+
+
+% We will attached the derivation from ~\ref{eqn:cos_mod_lie} to ~\ref{eqn:jacobian} later in the appendix
+% {\color{red}{Do the derivation here - we have the space}}.
+
+
+
+Our objective function is re-written from the visibility function:
+\begin{equation}
+\max_{\boldsymbol{w}} \sum_{i=1}^{N}
+\frac{s}{1 + e^{-k_s \left( \boldsymbol{k}^T \exp(\boldsymbol{w}) \boldsymbol{c} - \cos\alpha \right)}}
+\label{eqn:objective}
+\end{equation}
+for $N$ visible features. Where constant $s$ is the weight of the feature. In this work, we set $s = 1$, corresponding to maximizing feature visibility.
+% \textcolor{red}{It can be 1, or a scalar calculated from the trace/determinant of the feature's Fisher Information Matrix.}
+
+Applying the chain rule, the gradient for equation~\ref{eqn:objective} becomes:
+
+\begin{equation}
+\boldsymbol{J}_{\text{visibility}} =
+\frac{e^{v}}{(1+e^{v})^2} k_s \boldsymbol{J}
+\end{equation}
+\textcolor{red}{check ks/-ks in eq}
+
+where $v = -k_s(\cos\theta - \cos\alpha)$ and $\boldsymbol{J}$ is given by Equation~\ref{eqn:jacobian}.
+
+The Jacobian can now be used in steepest descent as follows:
+\begin{equation}
+    \boldsymbol{R}_{i+1}=\boldsymbol{exp}(\epsilon \boldsymbol{J}_{visibility})\boldsymbol{R}_{i}
+    \label{eq:optimization_loop}
+\end{equation}
+where $\epsilon=\frac{1}{n\pi}$ is the step size and $i$ is the iteration count. The choice of step size is for regularization by the amount of features $n$ present, also to keep the $\boldsymbol{so}(3)$ step within the ball of $\pi$ radius. Since $\{||\boldsymbol{w}||<\pi|\boldsymbol{w} \in \boldsymbol{so}(3)\}$ keeps its bijective relationship with $SO(3)$, over which, the relationship becomes surjective~\cite{forster2015imu}.
+
+
+\subsection{Trajectory Optimization}
+
+For perceptual tasks such as localization and tracking, maintaining overlap between consecutive viewpoints is important. Additionally, mechanical constraints (e.g., gimbal actuation limits) require smooth rotational motion.
+
+We therefore introduce a continuity objective that minimizes rotational velocity. The implementation takes a page from~\cite{ratliff2009chomp}, where rotation velocity is calculated via finite difference, but in $SO(3)$:
+\begin{equation}
+\max_{\boldsymbol{R}_0, \dots, \boldsymbol{R}_{N-1}}
+\sum_{i=0}^{N-1} \boldsymbol{v}^T \boldsymbol{R}_{i+1} \boldsymbol{R}_i^T \boldsymbol{v}
+\end{equation}
+
+This encourages smooth transitions between consecutive orientations.
+
+\subsection{Practical Optimization Enhancements}
+
+To improve convergence and robustness in practice, we incorporate several implementation-level modifications:
+\begin{itemize}
+    \item Adaptive step size scaling based on feature count
+    \item Early stopping based on convergence of the objective
+    \item Multiple initial orientation candidates to mitigate local minima
+\end{itemize}
+These enhancements do not change the underlying optimization formulation but improve practical performance in real-time settings.
+
+\subsubsection{Initial Guess and Scheduled Pseudo-FOV Exploration}
+
+The Sigmoid-based FOV model (Eq. \ref{eqn:sigmoid}) is susceptible to vanishing gradients when features lie far outside the field of view. Because the function's tails are nearly flat, optimization becomes highly sensitive to the initial sensor rotation; if feature clusters are significantly distant from the initial optical axis, the resulting low gradients can stall optimization progress entirely.
+
+To address this, we adopt a scheduled exploration strategy. During early iterations, we relax the FOV constraint by setting $\alpha = 180^\circ$, effectively removing the FOV limit. The FOV is then progressively reduced (e.g., $180^\circ \rightarrow 90^\circ \rightarrow$ target FOV), allowing the optimizer to first discover promising directions before refining within the true constraint.
+This strategy significantly improves convergence from poor initial orientations.
+
+
+\section{Evaluation in Simulation}
+The evaluation section focuses on the maximization of visible features in sensor’s FOV as our primary optimization objective. We also evaluate our method in Visual Localization settings. Our method performs competitively with previous methods that require exhaustive search, while costing a fraction of the time.
+
+This section is split into three parts. We start with a Monte-Carlo grid experiment that evaluates performance of our algorithm versus the brute force method. We then show the results of rotational trajectory optimization using our method. Finally, we evaluate our method for Visual Localization, in a photo-realistic simulator.
+
+\subsection{Visibility Optimization}
+In this section, we evaluate our visibility optimization outlined in Section~\ref{subsec:FOV_Optimizationo}.
+\subsubsection{Toy Example}
+We first demonstrate our method in a smaller scale example.  We setup a 3D grid with two clusters of 100 feature points. We then run our FOV optimization with and without FOV limit.
+
+\noindent \textbf{No FOV limitation:} Here, instead of optimizing over equation ~\ref{eqn:objective}, which is the full optimization with FOV limit, we optimize over equation~\ref{eqn:cos_mod_lie}, which has no FOV limit. This resulting in the convergence towards mean center of all features present.
+ see figure ~\ref{fig:mean}.
+
+\noindent \textbf{With FOV limitation:} Now, we imposed the FOV constraint, by optimizing over equation~\ref{eqn:objective}, with FOV constraint of 45 degrees, see figure~\ref{fig:FOV}.
+
+\subsubsection{Monte-Carlo Grid Optimization}
+
+We now evaluate our optimization in a Monte-Carlo setting, we optimize FOV over an entire grid. Maximum features in the grid are 15000, we sub-sampled in the interval of 2500. The grid's resolution is 20x20x2. The overview is in figure~\ref{fig:monte-carlos-grid}. As can be seen from the graph, the result of our method is often times close to the result of brute force search.
+
+\noindent \textbf{Rotation Optimality:}
+We count the amount of features present in the optimized FOV, in each grid location, for both our method and brute-force, and the result is shown in figure~\ref{fig:monte-carlos-feature-count}. Our method achieve similar performance with brute force search.
+
+\noindent \textbf{Computation Time Comparison:}
+We compare the computation time with our method and brute-force search. Note, the brute force search is done in the spherical coordinate, with 2 degrees resolution. See figure~\ref{fig:monte-carlos-time-cost}. Our method cost 100-650ms depending on the amount of features present, while the brute force search method ranges from 15-90 seconds.
+
+\noindent \textbf{Discussion:} Our method performs well against brute-force search. On average, 87.7 percent of the features seen from brute force searched are also present on the view direction found by our method.  In terms of computation time, our method can perform online.
+
+% And its objective function over iterations,see figure ~\ref{fig:objective}.
+
+
+% \begin{figure}[h]
+%     \centering
+%     \includegraphics[width=.48\textwidth]{objective_FOV_30degree.pdf}
+%     \caption{The objective value over iteration when optimizing in figure ~\ref{fig:FOV}}
+%     \label{fig:objective}
+% \end{figure}
+
+
+\subsection{Trajectory Optimization}
+We now evaluate our method in a rotational trajectory planning scenario. We use a grid with multiple clusters of features, and a trajectory with pre-plan translation and rotation way-points. We then re-plan the rotations of each way point on the trajectory, according to three different criteria. The three criteria are: 1) Feature visibility in FOV only. 2) Trajectory continuity only. and 3) The combined 1)2) FOV and continuity metric.
+
+
+\noindent \textbf{FOV feature visibility optimization only:}
+We show the effects of optimizing over visibility objective only (Equation~\ref{eqn:objective}), see figure ~\ref{fig:traj-visibility-only}.
+
+\noindent \textbf{Continuity (min velocity) optimization only only:}
+We show the effects of optimizing over velocity/continuity objective only (Equation~\ref{eqn:objective_trajectory}), See figure ~\ref{fig:traj-continuity-only}.
+
+\noindent \textbf{Combined continuity and visibility optimization:}
+We now combined the previous two objectives, and shows the result in figure ~\ref{fig:traj-continuity-and-visibility}
+
+
+One can observe the effects of using different objective function, as well as using the combined objective function.
+
+
+\begin{figure}
+\centering
+\begin{subfigure}{.48\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{Issac.png}
+  \caption{Sim environment with Nvidia Issac and Unreal Engine}
+  \label{fig:sub2}
+
+\end{subfigure}%
+\hspace{0.1cm}
+\begin{subfigure}{.48\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{COLMAP_vertical.png}
+  \caption{SfM environment from COLMAP}
+  \label{fig:sub1}
+\end{subfigure}
+    \caption{ }
+\label{fig:Simulation Environment}
+\end{figure}
+
+
+\begin{table}
+  \centering
+  \begin{tabular}{|cccc|}
+    \hline
+    Method & Map Building(s)& Run Time(s)& Total(s) \\
+    \hline
+    PC-Det& 0.0& 44.49&44.49\\
+    PC-Trace& 0.0& 65.74&65.74\\
+    GP-Det& 41.10& 1.350&42.45\\
+    GP-Trace& 26.48& 0.39&26.87\\
+    Quadratic-Det& 6.695& 0.35&7.045\\
+    Quadratic-Trace& 5.553& 0.13&5.683\\
+    \textbf{Ours}& 0.0& 0.436&\textbf{0.436}\\
+    \hline
+
+\end{tabular}
+
+
+\end{table}
+
+    \caption{Total time cost comparisons. PC-*,GP-* and Quadratic-* are previous methods. See~\ref{planning_with_prev}. The Map Building time is the time cost for building Fisher Information Fields}
+    \label{tab:time_cost}
+    \vspace{-10pt}
+\end{table}
+
+
+% computation time
+% LaTeX table (booktabs style)
+\begin{table}[t]
+\centering
+\caption{Average RRT planning iterations and time (s) over all maps. Optimized(ours) time adds RRT plan time (No Info.) + FoV optimization time.}
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{r2-a20} & \multicolumn{2}{c}{r1-a30} \\
+Method & iter. & time (s) & iter. & time (s) \\
+\midrule
+No Info.         & 30.0 & 174.18 & 30.0 & 174.16 \\
+PC-det           & 30.0 & 152.53 & 30.0 & 151.33 \\
+PC-Trace         & 30.0 & 152.47 & 30.0 & 151.51 \\
+GP-det           & 30.0 & 155.24 & 30.0 & 154.49 \\
+GP-Trace         & 30.0 & 166.34 & 30.0 & 165.85 \\
+Quadratic-det    & 30.0 & 159.08 & 30.0 & 155.78 \\
+Quadratic-Trace  & 30.0 & 170.73 & 30.0 & 168.44 \\
+optimized(ours)  & 30.0 & 174.39 & 30.0 & 174.30 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% registration failure
+\begin{table*}[t]
+\centering
+\caption{Registration failure rates (\% of failed localizations). X denotes no valid solution (no samples).}
+\begin{tabular}{llrrrrrrrr}
+\toprule
+ & cfg. & No Info & PC-det & PC-Trace & GP-det & GP-Trace & Quad-det & Quad-Trace & optimized(ours) \\
+\midrule
+\multirow{7}{*}{r2-a20} & Top & 65\% & 0\% & 12\% & 0\% & 80\% & 8\% & 28\% & 20\% \\
+ & Diagonal & 0\% & 2\% & 0\% & 8\% & 10\% & 0\% & 15\% & 12\% \\
+ & Bottom & 52\% & 0\% & 40\% & 2\% & 20\% & 3\% & 12\% & 0\% \\
+ & Left & 2\% & 0\% & 0\% & 0\% & 0\% & 0\% & 2\% & 0\% \\
+ & BigU & 31\% & 1\% & 16\% & 5\% & 26\% & 3\% & 13\% & 10\% \\
+ & SmallU & 75\% & 0\% & 22\% & 0\% & 38\% & 0\% & 22\% & 12\% \\
+ & Mid & 2\% & 2\% & 2\% & 5\% & 8\% & 3\% & 2\% & 8\% \\
+\midrule
+\multirow{7}{*}{r1-a30} & Top & 85\% & 2\% & 5\% & 0\% & 42\% & 36\% & 42\% & 28\% \\
+ & Diagonal & 35\% & 2\% & 28\% & 0\% & 25\% & 18\% & 35\% & 18\% \\
+ & Bottom & 65\% & 2\% & 20\% & 13\% & 40\% & 29\% & 22\% & 5\% \\
+ & Left & 45\% & X & 38\% & X & 30\% & X & 38\% & 42\% \\
+ & BigU & 54\% & 2\% & 26\% & 4\% & 39\% & 22\% & 28\% & 29\% \\
+ & SmallU & 77\% & 2\% & 8\% & 2\% & 22\% & 0\% & 5\% & 19\% \\
+ & Mid & 40\% & 0\% & 45\% & 10\% & 50\% & 38\% & 22\% & 68\% \\
+\midrule
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+\begin{figure}[b]
+\includegraphics[width=0.48\textwidth,trim={0pt 00 00 00},clip]{example_plan.png}
+    \caption{An example trajectory plan. Where the starting trajectory is in red. We shows the visible features to views sampled from the trajectory optimized by our method, by connecting the features to the camera center, via green rays.}
+    \label{fig:example_plan}
+\end{figure}
+
+
+
+
+\begin{figure}
+\centering
+\begin{subfigure}[b]{0.49\textwidth}
+   \includegraphics[width=1\linewidth]{overall_hist_r2_a20.png}
+   \caption{Visual Map r2-a20 has around 3500 SIFT features.}
+   \label{fig:Ng1}
+\end{subfigure}
+
+\begin{subfigure}[b]{0.49\textwidth}
+   \includegraphics[width=1\linewidth]{overall_hist_r1_a30.png}
+   \caption{Visual map r1-a30 has around 1500 SIFT features.}
+   \label{fig:Ng2}
+\end{subfigure}
+\caption{Accumulative localization error histogram. We include 6 previous methods from~\cite{zhang2020fisher}. Namely PC-*,Quad-* and GP-* (See~\ref{planning_with_prev}). Both visual maps are from the same SIFT map built by COLMAP. R1-a30 has a reduced amount of features. This graph was generated with the same script and condition as in~\cite{zhang2020fisher}. We refer interested readers to the paper for comparison.}
+\label{fig:localization_accuracy}
+\vspace{-10pt}
+\end{figure}
+
+
+\subsection{Visual Localization}
+
+We now evaluate our method in a Visual Localization scenario. We use the same Nvidia Isaac/Unreal Engine photorealistic
+simulator instance as ~\cite{zhang2020fisher}. In this setting, a SIFT visual feature map is built first by exhaustively taking posed images of the environment (Figure~\ref{fig:Simulation Environment}). The images are then sent to COLMAP~\cite{Schonberger_2016_CVPR} to triangulate visual features. Then we evaluate our method in this SfM map by planning trajectories in it. We then again use COLMAP to evaluate image registration error on the sampled images along the planned trajectories. Finally we compare our method against the previous methods from~\cite{zhang2020fisher}.
+
+
+We will use the results in Fisher information Field~\cite{zhang2020fisher} as a baseline of comparison. With the lack of globally exhaustive sampling from our side, we do not expect our algorithm to outperform in terms of localization accuracy. Further, compare to the methods in ~\cite{zhang2020fisher} which plan both translation and rotation, our method only plans rotation. This renders our comparison fairly unequal. Nonetheless, our method out performs all 6 previous planners in terms of computational time (Table~\ref{tab:time_cost}), by a large margin. Our method also out performed 3 of the 6 planners in the previous art, in terms of localization accuracy(Figure~\ref{fig:localization_accuracy}).
+
+  The evaluation environment uses Unreal Engine to render RGB and depth images. The images are then use in COLMAP~\cite{Schonberger_2016_CVPR} to reconstruct a sparse SIFT feature map. When a trajectory of the sensor is produced, one can then render sampled images along the trajectory, from UE. The new images are register against the existing feature map, and evaluate their localization accuracy, all in COLMAP.
+
+
+ Depth images are used to reconstruct an ESDF, to guide the trajectory planners in the euclidean space. Voxblox~\cite{oleynikova2017voxblox} produces reasonable results here. See Figure~\ref{fig:Simulation Environment}.
+
+The same 4 default trajectory start and end goals are use as in~\cite{zhang2020fisher}. We show the planning result with our method in figure~\ref{fig:example_plan}. On each planned trajectory, 100 way-point's poses are sampled. Images are then taken at those poses, for localization error analysis in COLMAP.
+
+ \noindent \textbf{Planning with previous methods:}
+ \label{planning_with_prev}
+We include 6 previous methods
+from~\cite{zhang2020fisher}. Amongst the 6 methods, 2 of them, named PC-Det and PC-Trace uses point-clouds directly, instead of Fisher Information Fields. When running these two methods, exhaustive search according to Fisher Information metrics (Trace and Determinant) is used, which incurs a large amount of time costs. For the remaining 4 methods, the environment grid is exhaustively scanned first for optimal view directions, according to Fisher Information metric, forming an Fisher Information Field.  Then, GP-Det and GP-Trace uses the sigmoid visibility function~\ref{eqn:sigmoid} to model its FOV limit. While Quad-Det and Quad-Trace uses a quadratic function to model its FOV limit. We run these methods as is, just like the way they were run in the same environment in~\cite{zhang2020fisher}. For further details on them. we refer interested readers to this previous paper.
+
+\noindent \textbf{Planning with our method:}
+Since we only plan in $SO(3)$, we use the polynomial trajectory planner~\cite{richter2016polynomial}~\cite{burri2015real-time} to plan for translation trajectory in the euclidean space. It considers ESDF to avoid obstacles. After translation trajectory planning, we perform our method, which do not use any other information aside from the SIFT visual features point-cloud.
+
+\noindent \textbf{Discussion:}
+Once again, the previous 6 methods plans both rotations and translation. This is advantageous, compare to our method, where we only plan for rotation. Therefore, the comparison is not apples to apples. More importantly, all 6 methods uses exhaustive search, which is very costly in time. Additionally, unlike these six methods, ours does not rely on depth maps to filter occluded SIFT features.
+Despite these disadvantages, our method out performs 3 out of the 6 previous planners, while requiring a small fraction of the time to run.
+
+
+% \begin{table}
+%   \centering
+%   \begin{tabular}{|cccc|}
+%     \hline
+%     Method & Map Building(s)& Run Time(s)& Total(s) \\
+%     \hline
+%     PC-Det& 0.0& 44.49&44.49\\
+%     PC-Trace& 0.0& 65.74&65.74\\
+%     GP-Det& 300.0& 1.350&0\\
+%     GP-Trace& 300.0& 0.39&0\\
+%     Quadratic-Det& 300.0& 0.35&0\\
+%     Quadratic-Trace& 300.0& 0.13&0\\
+%     \textbf{Ours}& 0.0& 0.293&\textbf{0.293}\\
+%     \hline
+
+% \end{tabular}
+%     \label{tab:time_cost}
+%     \caption{}
+
+% \end{table}
+
+
+\begin{figure*}[h!]
+
+\includegraphics[width=0.95\textwidth,trim={0pt 00 00 00},clip]{subsampled_setup.png}
+    \caption{We encourage the readers to view the attached video for a full record of the two trajectory runs. a) Upper left: See also Fig~\ref{fig:zooomed_in}. We collect SIFT visual features on the wall. A subsequent zig-zag trajectory is planned in blue, where the sensor is oriented forward, along the trajectory. We optimize the sensor rotation in red. b) Upper right: gimbal view showing gimbal activation and orienting towards features. c) Lower left: environment view. d) Lower right: SIFT features in FOV are rendered from COLMAP. One can see a concentration of features on a poster.}
+    \label{fig:exp_plan_traj}
+\end{figure*}
+
+\begin{figure}[h!]
+\includegraphics[width=0.46\textwidth,trim={0pt 00 00 00},clip]{spot.png}
+    \caption{Motion-Decoupled Camera and Quadruped robot platform. We also use VLP-16 to provide localization.}
+    \label{fig:spot}
+\end{figure}
+
+
+\begin{figure}[h!]
+\includegraphics[width=0.49\textwidth,trim={0pt 00 00 00},clip]{zoom_in.jpg}
+    \caption{The planned trajectory from another perspective}
+    \label{fig:zooomed_in}
+\end{figure}
+
+\section{Evaluation in Experiments}
+
+
+
+We demonstrate the effectiveness of our method in the real world. We choose Boston Dynamics quadruped robot Spot \footnote{\href{https://bostondynamics.com/products/spot/}{https://bostondynamics.com/products/spot/}.} and Iquotient Robotics ROS Based Pan Tilt gimbal \footnote{\href{https://www.robotshop.com/products/iquotient-robotics-ros-based-pan-tilt}{https://www.robotshop.com/products/iquotient-robotics-ros-based-pan-tilt}.}, in combination with Realsense D455 \footnote{\href{https://www.intelrealsense.com/depth-camera-d455/}{https://www.intelrealsense.com/depth-camera-d455/}.} as our motion-decoupled sensor-robot platform. See Fig~\ref{fig:spot}. We also use Velodyne VLP-16 to provide localizations.
+
+
+
+\subsection{Experiment Setup}
+We first collect posed images from the environment, to construct a SfM environment in COLMAP, similar to Fig~\ref{fig:sub1}. Then, we command Spot to walk a pre-planned trajectory, collecting camera images on the way. Finally, we registered the collected images on the path, into the SfM environment in COLMAP, and compare the registration success rate of optimized trajectory vs unoptimized.
+
+
+For accurate localization, The hall way environment see Fig~\ref{fig:exp_plan_traj} is first mapped with LiDAR. We use FAST-LIO to build a pointcloud map. To provide LiDAR localization for the subsequent experiments.
+
+We construct a SfM map in this enviroment with COLMAP. We designed a specific path of the camera so that all features are collected on one side of this environment. In this environment, the Feature map is shown in the upper left of Fig~\ref{fig:exp_plan_traj}.
+
+
+The robot platform is commanded to walk a pre-planned S shape trajectory Fig~\ref{fig:zooomed_in} in a hall way environment while collecting camera images. We then register the images collected against the SIFT feature map collected before, in COLMAP. We compare the registration success rate of the optimized red sensor trajectory (show in red, activated gimbal) to that of the default trajectory (show in blue, deactivated gimbal).
+
+\subsection{Results}
+\begin{table}
+    \centering
+
+    \begin{tabular}{|c|c|c|}
+        \hline
+        Trajectory & Fail Registration  Count & Registration success rate\\
+            \hline
+        Optimized (red) & \textbf{4/420} & \textbf{\%99.047} \\
+        Unoptimized (blue) &  124/420 &\%70.476 \\
+            \hline
+    \end{tabular}
+    \caption{The increased in registration success rate is due to the active orientation of the camera, which captures more features in its FOV.}
+    \label{tab:my_label}
+\end{table}
+% \subsubsection{qualitative}
+% The optimized trajectory vs optimized trajectory are show here in different view points
+\subsubsection{Quantitative Comparisons of registration success rate in COLMAP}
+Images collected along the trajectory are registered against the SIFT feature map in COLMAP. We compare the results of registration success rate between optimized (red) sensor trajectory and the unoptimized one(blue). The result is shown in Table~\ref{tab:my_label}. The increased in registration success rate is due to the active orientation of the camera, which captures more features in its FOV.
+
+
+
+
+\section{Conclusions}
+We have outlined an online, on-manifold optimization scheme for limited FoV motion decoupled sensors. We exhaustively evaluate its performance in both a Monte Carlos grid experiment, a photorealistic visual localization simulation and in the real world. Our method is real-time capable and competitive with previous methods.
+
+\begin{comment}
+
+
+\subsection{LiDAR SLAM}
+
+We use KITTI data ~\cite{Geiger2012CVPR} to generate triangle meshes with Puma~\cite{vizzo2021icra}, then import the environment into Gazebo, where we run LIO-SAM~\cite{liosam2020shan} with a 2-axis gimbled LiDAR, modelled in ~\color{blue}Cite jounral paper~\color{black}
+
+~\color{blue}generate qualitative LIDAR SLAM result with LIOSAM ~\color{black}
+
+~\color{blue}generate quantitative LIDAR SLAM result with LIOSAM ~\color{black}
+\end{comment}
+\begin{comment}
+
+
+\section{APPENDIX}
+\subsection{Jacobian of equation \ref{eqn:cos_mod_lie}}
+Starting from equation \ref{eqn:cos_mod_lie}, re-write the exponential map with its first order Taylor Series approximation $I+\boldsymbol{w}_{\wedge}$~\cite{forster2015imu}, Where $I$ is the 3x3 identity matrix and $\boldsymbol{w}_{\wedge}$ is the skew-symmetric matrix of $\boldsymbol{w}$:
+
+\begin{equation}
+cos(\theta)=(\boldsymbol{p}_i^w-\boldsymbol{t}_w/||\boldsymbol{p}_i^w-\boldsymbol{t}_w||)^T\boldsymbol{R}_0[\boldsymbol{I}+\boldsymbol{w}_{\wedge}]\boldsymbol{e^3}
+\label{eqn:cos_mod_lie_taylor}
+\end{equation}
+Let $\boldsymbol{k}^T=(\boldsymbol{p}_i^w-\boldsymbol{t}_w/||\boldsymbol{p}_i^w-\boldsymbol{t}_w||)^T\boldsymbol{R}_0$ and $\boldsymbol{c}=\boldsymbol{e}^3$, we have:
+\begin{equation}
+cos(\theta)=\boldsymbol{k}^T[I+\boldsymbol{w}_{\wedge}]\boldsymbol{c}
+\label{eqn:cos_mod_lie_taylor_symplified}
+\end{equation}
+$\boldsymbol{k}$ is 3x1, $\boldsymbol{c}$ is 3x1.
+
+Now take the derivative of equation \label{eqn:cos_mod_lie_taylor_symplified}, with respect to $\boldsymbol{w}$:
+\begin{equation}
+\frac{\partial cos(\theta)}{\partial\boldsymbol{w}}=
+\frac{\partial \begin{bmatrix}
+k_1 & k_2 & k_3
+\end{bmatrix}
+\begin{bmatrix}
+1 & -w_3 & w_2\\
+w_3 & 1 & -w_1\\
+-w_2 & w_1 & 1\\
+\end{bmatrix}
+\begin{bmatrix}
+c_1 \\ c_2 \\ c_3
+\end{bmatrix}}
+{\partial \boldsymbol{w}}
+\label{eqn:derivative_expanded}
+\end{equation}
+
+and  the result is :
+\begin{equation}
+\frac{\partial cos(\theta)}{\partial\boldsymbol{w}}=
+\begin{bmatrix}
+ \frac{\partial cos(\theta)}{\partial w_{1}}\\
+  \frac{\partial cos(\theta)}{\partial w_{2}}\\
+   \frac{\partial cos(\theta)}{\partial w_{3}}
+\end{bmatrix}
+=
+\begin{bmatrix}
+    c_2k_3-c_3k_2\\
+    c_3k_1-c_1k_3\\
+    c_1k_2-c_2k_1
+\end{bmatrix}
+\label{eqn:result}
+\end{equation}
+
+
+\subsection{Jacobian of $\boldsymbol{k}^T[I+\boldsymbol{w}_{\wedge}]^T\boldsymbol{c}$}
+Additionally, This part is useful in finite differencing formualtions like equation~\ref{eqn:objective_trajectory}
+If we use $\boldsymbol{k}^T[I+\boldsymbol{w}_{\wedge}]^T\boldsymbol{c}$ in stead of  $\boldsymbol{k}^T[I+\boldsymbol{w}_{\wedge}]\boldsymbol{c}$, then
+
+\begin{equation}
+\frac{\partial cos(\theta)}{\partial\boldsymbol{w}}=
+\begin{bmatrix}
+ \frac{\partial cos(\theta)}{\partial w_{1}}\\
+  \frac{\partial cos(\theta)}{\partial w_{2}}\\
+   \frac{\partial cos(\theta)}{\partial w_{3}}
+\end{bmatrix}
+=
+\begin{bmatrix}
+    c_3k_2-c_2k_3\\
+    c_1k_3-c_3k_1\\
+    c_2k_1-c_1k_2
+
+\end{bmatrix}
+\end{equation}
+
+\subsection{Tutorial of so(3) Optimization}
+Given two unit vectors $\boldsymbol{v}_2,\boldsymbol{v}_1$ (imagine two vectors shoots out from origin) find the rotation matrix $\boldsymbol{R}$ that rotates $\boldsymbol{v}_1$ to $\boldsymbol{v}_2$.  Let $cos(\theta)=\boldsymbol{v}_2^T\boldsymbol{v}_1$. And $cos(\theta_*)=\boldsymbol{v}_2^T\boldsymbol{R}\boldsymbol{v}_1$
+
+
+
+Therefore, the objective function can be written as:
+
+\begin{equation}
+\max_{\boldsymbol{R}} ~cos(\theta_*)
+\label{eqn:tut_sub}
+\end{equation}
+Identically,
+\begin{equation}
+\max_{\boldsymbol{R}} \boldsymbol{v}_2^T\boldsymbol{R}\boldsymbol{v}_1
+\label{eqn:tut_sub}
+\end{equation}
+Now subbing for $\boldsymbol{R}$, $\boldsymbol{R}=\boldsymbol{exp}(\boldsymbol{\omega}_{\wedge})\boldsymbol{R}_0$ Where $\boldsymbol{R}_0$ is the rotation result of current optimization iteration. And $\boldsymbol{exp}(\boldsymbol{\omega}_{\wedge})$ is a near 0, delta rotation, with $\boldsymbol{\omega}\in \boldsymbol{so(3)}$ , and $_{\wedge}$ is the skew-symmetric operator. (IMU Preintegration paper equation 1)
+
+$\boldsymbol{exp}(.)$ is the exponential map (equation 3) in the IMU pre-integration paper.
+
+
+
+\begin{equation}
+\max_{\boldsymbol{w}}~ \boldsymbol{v}_2^T\boldsymbol{exp}(\boldsymbol{\omega}_{\wedge})\boldsymbol{R}_0\boldsymbol{v}_1
+\label{eqn:tut_sub}
+\end{equation}
+
+Now substitute $\boldsymbol{exp}(\boldsymbol{\omega}_{\wedge})$ with its first order approximation $[I+\boldsymbol{w}_{\wedge}]$
+(IMU pre-integration equation 4)
+
+
+
+\begin{equation}
+\max_{\boldsymbol{w}}~ \boldsymbol{v}_2^T[I+\boldsymbol{w}_{\wedge}]\boldsymbol{R}_0\boldsymbol{v}_1
+\label{eqn:tut_sub}
+\end{equation}
+
+This form is now tractable as a regular optimization equation, we can find its Jacobian from this point.
+
+Let $\boldsymbol{k}^T=\boldsymbol{v}_2^T$ and $\boldsymbol{c}=\boldsymbol{R}_0\boldsymbol{v}_1$.
+
+
+\begin{equation}
+\max_{\boldsymbol{w}}~ \boldsymbol{k}^T[I+\boldsymbol{w}_{\wedge}]\boldsymbol{c}
+\label{eqn:tut_sub}
+\end{equation}
+
+
+\begin{equation}
+\frac{\partial\boldsymbol{k}^T[I+\boldsymbol{w}_{\wedge}]\boldsymbol{c}}{\partial\boldsymbol{w}}=
+\frac{\partial \begin{bmatrix}
+k_1 & k_2 & k_3
+\end{bmatrix}
+\begin{bmatrix}
+1 & -w_3 & w_2\\
+w_3 & 1 & -w_1\\
+-w_2 & w_1 & 1\\
+\end{bmatrix}
+\begin{bmatrix}
+c_1 \\ c_2 \\ c_3
+\end{bmatrix}}
+{\partial \boldsymbol{w}}
+\label{eqn:derivative_expanded}
+\end{equation}
+
+And the result is
+\begin{equation}
+\boldsymbol{J}=\frac{\partial cos(\theta_*)}{\partial\boldsymbol{w}}=
+\begin{bmatrix}
+ \frac{\partial cos(\theta)}{\partial w_{1}}\\
+  \frac{\partial cos(\theta)}{\partial w_{2}}\\
+   \frac{\partial cos(\theta)}{\partial w_{3}}
+\end{bmatrix}
+=
+\begin{bmatrix}
+    c_2k_3-c_3k_2\\
+    c_3k_1-c_1k_3\\
+    c_1k_2-c_2k_1
+\end{bmatrix}
+\label{eqn:result}
+\end{equation}
+
+
+The Jacobian of $cos(\theta_*)$ can now be used in steepest descent as follows:
+\begin{equation}
+    \boldsymbol{R}_{i+1}=\boldsymbol{exp}(\epsilon \boldsymbol{J})\boldsymbol{R}_{i}
+\end{equation}
+where $\epsilon=\frac{1}{\pi}$ is a regularization constant.
+
+The magnitude of $\boldsymbol{\omega}$ must be smaller than $\pi$ to keep its bijective relationship with $SO(3)$ otherwise it becomes surjective. (according to the paper)
+\end{comment}
+
+
+% \end{thebibliography}
+
+\bibliographystyle{IEEEtran}
+\bibliography{bibtex/bib/IEEEexample}
+
+\end{document}

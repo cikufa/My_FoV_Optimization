@@ -11,3 +11,8 @@ __pycache__/
 /Datafov15
 /tmp
 
+# Generated build and experiment outputs.
+/Manifold_cpp/build/
+/Map/*_clusters*/
+/Map/cluster*/
+/Results/

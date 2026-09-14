@@ -692,6 +692,8 @@ int RunOptimizationJob(const JobRequest& job, const SharedResources& shared_reso
 		std::cout << "Pre-filtering complete. backend=" << prefilter_backend
 		          << ", unique visible landmarks=" << visible_count
 		          << ", time_ms=" << occlusion_prefilter_ms << std::endl;
+		traj_op.exportOcclusionVisibilityCache(
+		    JoinPath(job.output_dir, "occlusion_visible_indices.txt"));
 	}
 
 	traj_op.exportInitialTrajectoryReference();

@@ -21,9 +21,11 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#ifdef FOV_HAVE_VOXBLOX
 #include <voxblox/core/esdf_map.h>
 #include <voxblox/io/layer_io.h>
 #include <voxblox/core/common.h>
+#endif
 #ifdef FOV_HAVE_ACT_MAP_DEPTHMAP
 #include <act_map/visibility_checker.h>
 #endif
@@ -289,6 +291,7 @@ public:
    }
 
    bool loadEsdfMap(const std::string& esdf_file_path) {
+#ifdef FOV_HAVE_VOXBLOX
        try {
            voxblox::Layer<voxblox::EsdfVoxel>::Ptr layer_ptr;
            constexpr bool kMultipleLayerSupport = true;
@@ -309,6 +312,13 @@ public:
            this->esdf_loaded_ = false;
            return false;
        }
+#else
+       (void)esdf_file_path;
+       std::cerr << "Warning: ESDF backend is unavailable in this build."
+                 << std::endl;
+       this->esdf_loaded_ = false;
+       return false;
+#endif
    }
 
    bool loadVisibilityDepthMap(const std::string& depth_map_file_path) {
@@ -375,6 +385,28 @@ public:
 
        this->invalidateVisibilityCache();
        return this->valid_points.size();
+   }
+
+   bool exportOcclusionVisibilityCache(const std::string& output_path) const {
+       if (!this->visibility_cache_ready_ || output_path.empty()) {
+           return false;
+       }
+       std::ofstream out(output_path);
+       if (!out.is_open()) {
+           std::cerr << "Could not write occlusion visibility cache: "
+                     << output_path << std::endl;
+           return false;
+       }
+       out << "# pose_idx followed by point-cloud indices that pass occlusion\n";
+       for (size_t pose_idx = 0; pose_idx < this->visible_points_per_pose_.size();
+            ++pose_idx) {
+           out << pose_idx;
+           for (size_t point_idx : this->visible_points_per_pose_[pose_idx]) {
+               out << " " << point_idx;
+           }
+           out << "\n";
+       }
+       return true;
    }
 
    void setEsdfConfig(float distance_threshold_m, bool use_interpolation = true) {
@@ -452,10 +484,16 @@ public:
 
    bool isPointVisible(const Eigen::Vector3f& camera_pos,
                        const Eigen::Vector3f& point_pos) {
+#ifdef FOV_HAVE_VOXBLOX
        if (!this->esdf_loaded_ || !this->esdf_map_) {
            return true;
        }
        return this->checkVisibilityEsdf(camera_pos, point_pos);
+#else
+       (void)camera_pos;
+       (void)point_pos;
+       return true;
+#endif
    }
 
    void myinitialization(
@@ -487,8 +525,6 @@ public:
        this->output_trajectory_filename_twc= output_trajectory_filename_twc;
 
 
-       this->v<<1,1,1;
-       this->v=this->v/this->v.norm();
        // Optical axis convention: for Twc in this dataset the camera forward
        // axis aligns with +Z. Using +X here rotates visibility about the wrong
        // axis and degrades optimization.
@@ -927,24 +963,35 @@ private:
 
 public:
 
-// rotational velocity constraint
-   std::vector<Eigen::Vector3f> velocity_finite_differencing_jacobian(std::vector<PoseSE3> starting_trajectory){
-       std::vector<Eigen::Vector3f> trajecotry_jacobian;
-       //suppose rotation velocity difference is   R2R1^T,  R1 is the earlier rotation, R2 is the later rotation
-       for (int i =1;i<starting_trajectory.size()-1;i++){ //restric to elements that are not the head or the tail of the vector
-           //jacobian as the later rotation
-           Eigen::Vector3f K_2=this->v.transpose();
-           Eigen::Vector3f C_2=(starting_trajectory[i].get_rotation())*(starting_trajectory[i-1].get_rotation().transpose())*this->v;
-           Eigen::Vector3f later_J=get_Jacobian_from_K_and_C(K_2[0],K_2[1],K_2[2],C_2[0],C_2[1],C_2[2]);
-           //jacobian as the earlier rotation
-           Eigen::Vector3f K_1=(this->v.transpose())*(starting_trajectory[i+1].get_rotation())*(starting_trajectory[i].get_rotation().transpose());
-           Eigen::Vector3f C_1=this->v;
-           Eigen::Vector3f early_J=get_Jacobian_of_transposed_exp_from_K_and_C(K_1[0],K_1[1],K_1[2],C_1[0],C_1[1],C_1[2]);
-           //store into vector
-
-           trajecotry_jacobian.push_back(later_J+early_J);
+// Body-frame gradient of the neighboring-view-direction continuity objective
+//
+//   S_view = sum_i (R_{i+1} c)^T (R_i c),
+//
+// where c is the camera optical axis.  The visibility Jacobian is also
+// body/right-trivialized, so returning the continuity gradient in the body
+// frame lets the optimizer combine both terms before applying
+// R_i <- R_i Exp(delta_body^).
+   std::vector<Eigen::Vector3f> calculate_view_continuity_body_jacobian(
+       const std::vector<PoseSE3>& starting_trajectory){
+       std::vector<Eigen::Vector3f> trajectory_jacobian;
+       if (starting_trajectory.size() < 3) {
+           return trajectory_jacobian;
        }
-       return trajecotry_jacobian;
+
+       trajectory_jacobian.reserve(starting_trajectory.size() - 2);
+       for (size_t i = 1; i + 1 < starting_trajectory.size(); ++i) {
+           const Eigen::Matrix3f R = starting_trajectory[i].get_rotation();
+           const Eigen::Vector3f previous_view_world =
+               starting_trajectory[i - 1].get_rotation() * this->c;
+           const Eigen::Vector3f next_view_world =
+               starting_trajectory[i + 1].get_rotation() * this->c;
+           const Eigen::Vector3f neighbor_views_body =
+               R.transpose() * (previous_view_world + next_view_world);
+
+           // dS_view/d(delta_body) = c x R_i^T(c_{i-1} + c_{i+1}).
+           trajectory_jacobian.push_back(this->c.cross(neighbor_views_body));
+       }
+       return trajectory_jacobian;
    }
    Eigen::Vector3f get_Jacobian_from_K_and_C(float K1,float K2,float K3,float C1,float C2,float C3){
        Eigen::Vector3f J;
@@ -954,15 +1001,6 @@ public:
        J<<a,b,c;
        return J;      
    }
-   Eigen::Vector3f get_Jacobian_of_transposed_exp_from_K_and_C(float K1,float K2,float K3,float C1,float C2,float C3){
-       Eigen::Vector3f J;
-       float a=C3*K2-C2*K3;
-       float b=C1*K3-C3*K1;
-       float c=C2*K1-C1*K2;
-       J<<a,b,c;
-       return J;      
-   }  
-
    void change_valid_points_list(std::vector<size_t> valid_list){
        this->valid_points=valid_list;
        this->invalidateVisibilityCache();
@@ -1211,10 +1249,8 @@ public:
        float prev_avg_jac_norm = 1.0f;
        float adaptive_step_scale = 1.0f;
        for (int i =0;i<this->max_iteration;i++){
-           std::vector<Eigen::Vector3f> trajecotry_jacobian=
-                this->velocity_finite_differencing_jacobian(this->trajectory); //this->trajectory_jacobian_step: scale factor for the smoothness (velocity) Jacobian
-        //    std::cout<<"trajectory size " <<this->trajectory.size()<<std::endl;
-        //    std::cout<<"trajectory jacobain size " <<trajecotry_jacobian.size()<<std::endl;
+           const std::vector<Eigen::Vector3f> smoothness_jacobian =
+               this->calculate_view_continuity_body_jacobian(this->trajectory);
 
            int clipped_min_count = 0;
            int clipped_max_count = 0;
@@ -1238,14 +1274,16 @@ public:
 
 
 			//optimization
-			for (int j =0;j<trajecotry_jacobian.size();j++){
+			for (size_t j = 0; j < smoothness_jacobian.size(); ++j){
 				Eigen::Vector3f FOV_Jacobian,combined_Jacobian;
-                const size_t pose_index = static_cast<size_t>(j + 1);
+                const size_t pose_index = j + 1;
 				FOV_Jacobian=calculate_FOV_jacobian_for_pose(pose_index, i);
                 float norm_scale = norm_scale_iter;
-                float smooth_scale = 0.5f;
+                // Preserve the historical effective regularization strength;
+                // trajectory_jacobian_step is the user-tunable continuity weight.
+                constexpr float smooth_scale = 0.5f;
                 const Eigen::Vector3f traj_scaled =
-                    this->trajectory_jacobian_step * smooth_scale * trajecotry_jacobian[j];
+                    this->trajectory_jacobian_step * smooth_scale * smoothness_jacobian[j];
 				combined_Jacobian = FOV_Jacobian + traj_scaled;
 				R = trajectory[j+1].get_rotation();
 
@@ -1659,6 +1697,7 @@ private:
 
    bool checkVisibilityEsdf(const Eigen::Vector3f& camera_pos,
                             const Eigen::Vector3f& point_pos) const {
+#ifdef FOV_HAVE_VOXBLOX
        if (!this->esdf_map_) {
            return true;
        }
@@ -1726,9 +1765,15 @@ private:
        }
 
        return true;
+#else
+       (void)camera_pos;
+       (void)point_pos;
+       return true;
+#endif
    }
 
    void initializeRaycastDefaultsFromMap() {
+#ifdef FOV_HAVE_VOXBLOX
        if (!this->esdf_map_) {
            return;
        }
@@ -1745,6 +1790,7 @@ private:
        if (this->esdf_config_.endpoint_margin_m <= 0.0f) {
            this->esdf_config_.endpoint_margin_m = 1.5f * voxel_size;
        }
+#endif
    }
 
    void invalidateVisibilityCache() {
@@ -1778,7 +1824,6 @@ private:
        return this->valid_points;
    }
 
-   Eigen::Vector3f v;
    std::vector<PoseSE3> trajectory;
    std::vector<double> imported_times_;
    std::string quivers_filename ;
@@ -1821,7 +1866,9 @@ private:
    };
 
    EsdfConfig esdf_config_;
+#ifdef FOV_HAVE_VOXBLOX
    voxblox::EsdfMap::Ptr esdf_map_;
+#endif
    bool esdf_loaded_ = false;
    std::string esdf_map_path_;
    int occlusion_backend_mode_ = kOcclusionAuto;

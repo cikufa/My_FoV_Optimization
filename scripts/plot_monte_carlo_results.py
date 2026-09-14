@@ -483,6 +483,8 @@ def plot_top_view_quivers(
     sample_points=0,
     include_per_iter_opt_quivers=True,
     include_init_opt_quivers=True,
+    bf_color="red",
+    opt_color="blue",
 ):
     import matplotlib.pyplot as plt
 
@@ -556,7 +558,7 @@ def plot_top_view_quivers(
         ax.quiver(
             refs_bf[:, 0], refs_bf[:, 1],
             dirs_bf[:, 0] * (scale * 0.9), dirs_bf[:, 1] * (scale * 0.9),
-            color="blue",
+            color=bf_color,
             alpha=0.95,
             angles="xy",
             scale_units="xy",
@@ -566,20 +568,20 @@ def plot_top_view_quivers(
             label="BF",
         )
 
-    # Final optimized quivers.
+    # Final PIVOT-optimized quivers.
     refs_final = opt_quivers[:, 0:2]
     dirs_final = _normalize_xy(opt_quivers[:, 3:5])
     ax.quiver(
         refs_final[:, 0], refs_final[:, 1],
         dirs_final[:, 0] * (scale * 0.6), dirs_final[:, 1] * (scale * 0.6),
-        color="red",
+        color=opt_color,
         alpha=0.95,
         angles="xy",
         scale_units="xy",
         scale=1,
         width=QUIVER_WIDTH_2D_MAIN,
         **QUIVER_HEAD_2D_MAIN,
-        label="Final Opt",
+        label="PIVOT",
     )
 
     if bounds is not None:
@@ -587,10 +589,12 @@ def plot_top_view_quivers(
         ax.set_xlim(mins[0], maxs[0])
         ax.set_ylim(mins[1], maxs[1])
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title("Top View: Opt (red), BF (blue), Init/Iter (green)")
+    ax.set_title(
+        f"Top View: PIVOT ({opt_color}), BF ({bf_color}), Init/Iter (green)"
+    )
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
-    ax.legend(loc="upper right")
+    ax.legend(loc="upper right", prop={"weight": "bold"})
     fig.tight_layout()
     fig.savefig(out_path, dpi=_PAPER_FIG_DPI, bbox_inches="tight")
     plt.close(fig)
@@ -1798,7 +1802,7 @@ def plot_comparison_feature_count(rows, out_path):
     plt.close(fig)
 
 
-def plot_comparison_visibility(rows, out_path):
+def plot_comparison_visibility(rows, out_path, bf_color="tab:orange"):
     import matplotlib.pyplot as plt
 
     if not rows:
@@ -1819,7 +1823,7 @@ def plot_comparison_visibility(rows, out_path):
         x - width / 2, opt_vis, width, label="Ours", color="tab:blue", alpha=0.88
     )
     bars_bf = ax.bar(
-        x + width / 2, bf_vis, width, label="Brute force", color="tab:orange", alpha=0.78
+        x + width / 2, bf_vis, width, label="Brute force", color=bf_color, alpha=0.78
     )
     ax.set_title("Sigmoid visibility", pad=8)
     ax.set_xlabel("Subsample level")
@@ -1842,7 +1846,7 @@ def plot_comparison_visibility(rows, out_path):
     plt.close(fig)
 
 
-def plot_comparison_time_visibility(rows, out_path):
+def plot_comparison_time_visibility(rows, out_path, bf_color="tab:orange"):
     """
     Single figure: time (top) + visibility (bottom), shared x-axis. Saves vertical space vs two files.
     """
@@ -1878,7 +1882,7 @@ def plot_comparison_time_visibility(rows, out_path):
             x - width / 2, opt_time, width, label="Ours", color="tab:blue", alpha=0.88
         )
         bars_tb = ax_t.bar(
-            x + width / 2, bf_time, width, label="Brute force", color="tab:orange", alpha=0.78
+            x + width / 2, bf_time, width, label="Brute force", color=bf_color, alpha=0.78
         )
         ax_t.set_ylabel("Time (ms)")
         ax_t.set_title("Per-pose runtime", pad=6)
@@ -1899,7 +1903,7 @@ def plot_comparison_time_visibility(rows, out_path):
         x - width / 2, opt_vis, width, label="Ours", color="tab:blue", alpha=0.88
     )
     bars_vb = ax_v.bar(
-        x + width / 2, bf_vis, width, label="Brute force", color="tab:orange", alpha=0.78
+        x + width / 2, bf_vis, width, label="Brute force", color=bf_color, alpha=0.78
     )
     ax_v.set_title("Sigmoid visibility", pad=6)
     ax_v.set_xlabel("Subsample level")
@@ -1928,7 +1932,7 @@ def plot_comparison_time_visibility(rows, out_path):
     plt.close(fig)
 
 
-def plot_comparison_time(rows, out_path):
+def plot_comparison_time(rows, out_path, bf_color="tab:orange"):
     import matplotlib.pyplot as plt
 
     if not rows:
@@ -1952,7 +1956,7 @@ def plot_comparison_time(rows, out_path):
             x - width / 2, opt_time, width, label="Ours", color="tab:blue", alpha=0.88
         )
         bars_bf = ax.bar(
-            x + width / 2, bf_time, width, label="Brute force", color="tab:orange", alpha=0.78
+            x + width / 2, bf_time, width, label="Brute force", color=bf_color, alpha=0.78
         )
         ax.set_title("Per-pose runtime", pad=8)
         ax.set_xlabel("Subsample level")
